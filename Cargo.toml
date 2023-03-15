@@ -8,8 +8,12 @@
 [dependencies]
   axum = "0.6.11"
   config = "0.13.3"
+  ethers = "2.0.0"
+  futures = "0.3.27"
+  git2 = "0.16.1"
   hyper = "0.14.25"
   serde = { version = "1.0.155", features = ["derive"] }
+  tempfile = "3.4.0"
   tokio = { version = "1.26.0", features = ["full"] }
   tower = "0.4.13"
   tower-http = { version = "0.4.0", features = ["trace", "request-id", "util"] }
@@ -24,3 +28,4 @@
 [dev-dependencies]
   once_cell = "1.17.1"
   reqwest = "0.11.14"
+  serde_json = "1.0.94"
