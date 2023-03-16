@@ -50,11 +50,10 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     // }
 
     // Create a temporary directory for the cloned repository.
-    let temp_dir = TempDir::new();
+    let temp_dir = TempDir::new().unwrap();
 
     // Clone the repository and checking out the commit.
-    let possible_repo =
-        clone_repo_and_checkout_commit(repo_url, commit_hash, temp_dir.as_ref().unwrap()).await;
+    let possible_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
     if possible_repo.is_err() {
         return (http::StatusCode::BAD_REQUEST, format!("Unable to clone repository {repo_url}"))
             .into_response()
@@ -71,7 +70,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
         )
             .into_response()
     }
-    return (http::StatusCode::OK, "OK").into_response()
+    (http::StatusCode::OK, "OK").into_response()
 
     // Extract profiles from the foundry.toml file.
 
