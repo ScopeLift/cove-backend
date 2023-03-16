@@ -7,7 +7,7 @@ use axum::{
 use ethers::types::{Chain, TxHash};
 use git2::{Oid, Repository};
 use serde::Deserialize;
-use std::{error::Error, str::FromStr};
+use std::{error::Error, path::Path, str::FromStr};
 use tempfile::TempDir;
 
 #[derive(Deserialize)]
@@ -37,24 +37,40 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     // let chain_id =
     let tx_hash = TxHash::from_str(&json.creation_tx_hash).unwrap();
 
-    let provider = provider_from_chain(chain_id);
-    let creation_code = contract_creation_data(&provider, tx_hash).await;
-
-    return (http::StatusCode::OK, "OK").into_response()
+    // let provider = provider_from_chain(chain_id);
+    // let creation_code = contract_creation_data(&provider, tx_hash).await;
 
     // Return an error if there's no creation code for the transaction hash.
-    //   if creation_code.is_none() {
-    //       return (
-    //           http::StatusCode::BAD_REQUEST,
-    //           format!("No creation code for tx hash {tx_hash} on chain ID {chain_id}"),
-    //       )
-    //           .into_response()
-    //   }
+    // if creation_code.is_none() {
+    //     return (
+    //         http::StatusCode::BAD_REQUEST,
+    //         format!("No creation code for tx hash {tx_hash} on chain ID {chain_id}"),
+    //     )
+    //         .into_response()
+    // }
+
+    // Create a temporary directory for the cloned repository.
+    let temp_dir = TempDir::new().unwrap();
 
     // Clone the repository and checking out the commit.
-    //   let _repo = clone_repo_and_checkout_commit(repo_url, commit_hash);
+    let possible_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
+    if possible_repo.is_err() {
+        return (http::StatusCode::BAD_REQUEST, format!("Unable to clone repository {repo_url}"))
+            .into_response()
+    }
+    let repo = possible_repo.unwrap();
 
     // Verify this is a foundry project by looking for the presence of a foundry.toml file.
+    // check if a file exists in the repository (using repo status_file method)
+    let found_file = repo.status_file(Path::new("foundry.toml"));
+    if found_file.is_err() {
+        return (
+            http::StatusCode::BAD_REQUEST,
+            format!("No foundry.toml file found in repository {repo_url}"),
+        )
+            .into_response()
+    }
+    (http::StatusCode::OK, "OK").into_response()
 
     // Extract profiles from the foundry.toml file.
 
@@ -67,23 +83,26 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
 async fn clone_repo_and_checkout_commit(
     repo_url: &str,
     commit_hash: &str,
+    temp_dir: &TempDir,
 ) -> Result<Repository, Box<dyn Error>> {
-    // Create a temporary directory for the cloned repository.
-    let tmp_dir = TempDir::new()?;
-
     // Clone the repository.
-    let repo = Repository::clone(repo_url, tmp_dir.path())?;
+    let repo = Repository::clone(repo_url, temp_dir.path())?;
 
     // Find the specified commit (object ID).
     let oid = Oid::from_str(commit_hash)?;
     let commit = repo.find_commit(oid)?;
 
+    // Create a branch for the commit.
+    let branch = repo.branch(commit_hash, &commit, false);
+
     // Checkout the commit.
     let obj = repo.revparse_single(&("refs/heads/".to_owned() + commit_hash)).unwrap();
     repo.checkout_tree(&obj, None)?;
+
     repo.set_head(&("refs/heads/".to_owned() + commit_hash))?;
 
     // Drop objects that have references to the repo so that we can return it.
+    drop(branch);
     drop(commit);
     drop(obj);
     Ok(repo)
