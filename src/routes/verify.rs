@@ -37,17 +37,17 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     // let chain_id =
     let tx_hash = TxHash::from_str(&json.creation_tx_hash).unwrap();
 
-    // let provider = provider_from_chain(chain_id);
-    // let creation_code = contract_creation_data(&provider, tx_hash).await;
+    let provider = provider_from_chain(chain_id);
+    let creation_code = contract_creation_data(&provider, tx_hash).await;
 
     // Return an error if there's no creation code for the transaction hash.
-    // if creation_code.is_none() {
-    //     return (
-    //         http::StatusCode::BAD_REQUEST,
-    //         format!("No creation code for tx hash {tx_hash} on chain ID {chain_id}"),
-    //     )
-    //         .into_response()
-    // }
+    if creation_code.is_none() {
+        return (
+            http::StatusCode::BAD_REQUEST,
+            format!("No creation code for tx hash {tx_hash} on chain ID {chain_id}"),
+        )
+            .into_response()
+    }
 
     // Create a temporary directory for the cloned repository.
     let temp_dir = TempDir::new().unwrap();
@@ -70,7 +70,6 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
         )
             .into_response()
     }
-    (http::StatusCode::OK, "OK").into_response()
 
     // Extract profiles from the foundry.toml file.
 
@@ -78,6 +77,9 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
 
     // Check if any of the creation codes match the bytecode of the contract. If so, we were
     // successful.
+
+    // None match, so return an error with some info.
+    (http::StatusCode::OK, "OK").into_response()
 }
 
 async fn clone_repo_and_checkout_commit(
