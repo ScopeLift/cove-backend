@@ -30,7 +30,7 @@ pub struct VerifyData {
         creation_tx_hash = %json.creation_tx_hash,
     )
 )]
-pub async fn verify(Json(json): Json<VerifyData>) -> Response {
+pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
     let repo_url = json.repo_url.as_str();
     let commit_hash = json.repo_commit.as_str();
     let chain_id = Chain::try_from(json.chain_id).unwrap();
@@ -46,7 +46,6 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
             http::StatusCode::BAD_REQUEST,
             format!("No creation code for tx hash {tx_hash} on chain ID {chain_id}"),
         )
-            .into_response()
     }
 
     // Create a temporary directory for the cloned repository.
@@ -56,7 +55,6 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     let possible_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
     if possible_repo.is_err() {
         return (http::StatusCode::BAD_REQUEST, format!("Unable to clone repository {repo_url}"))
-            .into_response()
     }
     let repo = possible_repo.unwrap();
 
@@ -68,7 +66,6 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
             http::StatusCode::BAD_REQUEST,
             format!("No foundry.toml file found in repository {repo_url}"),
         )
-            .into_response()
     }
 
     // Extract profiles from the foundry.toml file.
@@ -79,7 +76,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     // successful.
 
     // None match, so return an error with some info.
-    (http::StatusCode::OK, "OK").into_response()
+    (http::StatusCode::OK, "OK".to_string())
 }
 
 async fn clone_repo_and_checkout_commit(
