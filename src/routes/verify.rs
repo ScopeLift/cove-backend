@@ -37,8 +37,8 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     // let chain_id =
     let tx_hash = TxHash::from_str(&json.creation_tx_hash).unwrap();
 
-    let provider = provider_from_chain(chain_id);
-    let creation_code = contract_creation_data(&provider, tx_hash).await;
+    // let provider = provider_from_chain(chain_id);
+    // let creation_code = contract_creation_data(&provider, tx_hash).await;
 
     // Return an error if there's no creation code for the transaction hash.
     // if creation_code.is_none() {
