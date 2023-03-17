@@ -11,6 +11,7 @@
   ethers = "2.0.0"
   futures = "0.3.27"
   git2 = "0.16.1"
+  heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs.git", version = "0.4.0" }
   hyper = "0.14.25"
   serde = { version = "1.0.155", features = ["derive"] }
   tempfile = "3.4.0"

@@ -1,1 +1,4 @@
 /target
+
+# heimdall-rs default output directory
+/output

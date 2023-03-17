@@ -1,6 +1,6 @@
 use ethers::{
     providers::{Http, Middleware, Provider},
-    types::{Bytes, Chain, TxHash},
+    types::{Address, Bytes, Chain, TxHash},
 };
 use std::{env, sync::Arc};
 
@@ -25,6 +25,17 @@ pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     }
 }
 
+pub fn provider_url_from_chain(chain: Chain) -> String {
+    match chain {
+        Chain::XDai => env::var("GNOSIS_CHAIN_RPC_URL").unwrap(),
+        Chain::Goerli => env::var("GOERLI_RPC_URL").unwrap(),
+        Chain::Mainnet => env::var("MAINNET_RPC_URL").unwrap(),
+        Chain::Optimism => env::var("OPTIMISM_RPC_URL").unwrap(),
+        Chain::Polygon => env::var("POLYGON_RPC_URL").unwrap(),
+        _ => panic!("Unsupported chain"),
+    }
+}
+
 pub async fn contract_creation_data(
     provider: &Arc<Provider<Http>>,
     tx_hash: TxHash,
@@ -35,6 +46,10 @@ pub async fn contract_creation_data(
         .ok()
         .and_then(|tx| tx.map(|tx| if tx.to.is_none() { Some(tx.input) } else { None }))
         .flatten()
+}
+
+pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Address) -> Bytes {
+    provider.get_code(address, None).await.unwrap()
 }
 
 // pub struct MultiChainProvider {
