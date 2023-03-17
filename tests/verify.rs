@@ -1,8 +1,6 @@
 use serde_json::json;
 mod common;
 
-// NOTE: Current hashes and contract addresses were randomly pulled from Goerli Etherscan.
-
 #[tokio::test]
 async fn verify_returns_a_200_when_all_fields_are_valid() {
     let app = common::spawn_app().await;

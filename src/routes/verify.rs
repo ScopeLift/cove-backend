@@ -1,9 +1,5 @@
 use crate::provider::{contract_creation_data, provider_from_chain};
-use axum::{
-    http,
-    response::{IntoResponse, Response},
-    Json,
-};
+use axum::{http, response::IntoResponse, Json};
 use ethers::types::{Chain, TxHash};
 use git2::{Oid, Repository};
 use serde::Deserialize;
