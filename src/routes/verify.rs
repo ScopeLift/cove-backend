@@ -1,9 +1,5 @@
 use crate::provider::{contract_creation_data, provider_from_chain};
-use axum::{
-    http,
-    response::{IntoResponse, Response},
-    Json,
-};
+use axum::{http, response::IntoResponse, Json};
 use ethers::types::{Chain, TxHash};
 use git2::{Oid, Repository};
 use serde::Deserialize;
@@ -30,24 +26,23 @@ pub struct VerifyData {
         creation_tx_hash = %json.creation_tx_hash,
     )
 )]
-pub async fn verify(Json(json): Json<VerifyData>) -> Response {
+pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
     let repo_url = json.repo_url.as_str();
     let commit_hash = json.repo_commit.as_str();
     let chain_id = Chain::try_from(json.chain_id).unwrap();
     // let chain_id =
     let tx_hash = TxHash::from_str(&json.creation_tx_hash).unwrap();
 
-    // let provider = provider_from_chain(chain_id);
-    // let creation_code = contract_creation_data(&provider, tx_hash).await;
+    let provider = provider_from_chain(chain_id);
+    let creation_code = contract_creation_data(&provider, tx_hash).await;
 
     // Return an error if there's no creation code for the transaction hash.
-    // if creation_code.is_none() {
-    //     return (
-    //         http::StatusCode::BAD_REQUEST,
-    //         format!("No creation code for tx hash {tx_hash} on chain ID {chain_id}"),
-    //     )
-    //         .into_response()
-    // }
+    if creation_code.is_none() {
+        return (
+            http::StatusCode::BAD_REQUEST,
+            format!("No creation code for tx hash {tx_hash} on chain ID {chain_id}"),
+        )
+    }
 
     // Create a temporary directory for the cloned repository.
     let temp_dir = TempDir::new().unwrap();
@@ -56,7 +51,6 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     let possible_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
     if possible_repo.is_err() {
         return (http::StatusCode::BAD_REQUEST, format!("Unable to clone repository {repo_url}"))
-            .into_response()
     }
     let repo = possible_repo.unwrap();
 
@@ -68,9 +62,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
             http::StatusCode::BAD_REQUEST,
             format!("No foundry.toml file found in repository {repo_url}"),
         )
-            .into_response()
     }
-    (http::StatusCode::OK, "OK").into_response()
 
     // Extract profiles from the foundry.toml file.
 
@@ -78,6 +70,9 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
 
     // Check if any of the creation codes match the bytecode of the contract. If so, we were
     // successful.
+
+    // None match, so return an error with some info.
+    (http::StatusCode::OK, "OK".to_string())
 }
 
 async fn clone_repo_and_checkout_commit(

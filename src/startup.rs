@@ -30,6 +30,7 @@ pub fn run(listener: TcpListener) -> hyper::Result<Server<AddrIncoming, IntoMake
     let app = Router::new()
         .route("/health_check", get(routes::health_check))
         .route("/verify", post(routes::verify))
+        .route("/contract", get(routes::contract))
         .layer(trace_layer);
 
     // Run it with hyper on the given TcpListener.
