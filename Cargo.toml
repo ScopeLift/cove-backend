@@ -3,12 +3,12 @@
   name = "cove"
   version = "0.1.0"
 
-  # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
   axum = "0.6.11"
   config = "0.13.3"
-  ethers = "2.0.0"
+  ethers = { git = "https://github.com/gakonst/ethers-rs" }
+  # TODO Update to main foundry repo after https://github.com/foundry-rs/foundry/pull/4573 is merged
+  forge = { git = "https://github.com/FrankieIsLost/foundry.git", version = "0.2.0", branch = "frankie--bump-ethers304f" }
   futures = "0.3.27"
   git2 = "0.16.1"
   heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs.git", version = "0.4.0" }
