@@ -1,9 +1,12 @@
-use crate::provider::{contract_creation_data, provider_from_chain};
+use crate::{
+    compile,
+    provider::{contract_creation_data, provider_from_chain},
+};
 use axum::{http, response::IntoResponse, Json};
 use ethers::types::{Chain, TxHash};
 use git2::{Oid, Repository};
 use serde::Deserialize;
-use std::{error::Error, path::Path, str::FromStr};
+use std::{error::Error, str::FromStr};
 use tempfile::TempDir;
 
 #[derive(Deserialize)]
@@ -48,20 +51,15 @@ pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
     let temp_dir = TempDir::new().unwrap();
 
     // Clone the repository and checking out the commit.
-    let possible_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
-    if possible_repo.is_err() {
+    let maybe_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
+    if maybe_repo.is_err() {
         return (http::StatusCode::BAD_REQUEST, format!("Unable to clone repository {repo_url}"))
     }
-    let repo = possible_repo.unwrap();
 
-    // Verify this is a foundry project by looking for the presence of a foundry.toml file.
-    // check if a file exists in the repository (using repo status_file method)
-    let found_file = repo.status_file(Path::new("foundry.toml"));
-    if found_file.is_err() {
-        return (
-            http::StatusCode::BAD_REQUEST,
-            format!("No foundry.toml file found in repository {repo_url}"),
-        )
+    // Build the project and get the resulting output.
+    let output = compile::compile(&temp_dir.path(), creation_code.unwrap());
+    if output.is_err() {
+        return (http::StatusCode::TEMPORARY_REDIRECT, output.err().unwrap().to_string())
     }
 
     // Extract profiles from the foundry.toml file.
