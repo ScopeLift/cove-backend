@@ -57,20 +57,12 @@ pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
     }
 
     // Build the project and get the resulting output.
-    let output = compile::compile(&temp_dir.path(), creation_code.unwrap());
-    if output.is_err() {
-        return (http::StatusCode::TEMPORARY_REDIRECT, output.err().unwrap().to_string())
+    // TODO Some refactoring, ended up just doing the verification in the compile module for now.
+    let verified_artifact = compile::compile(&temp_dir.path(), creation_code.unwrap());
+    if verified_artifact.is_err() {
+        return (http::StatusCode::BAD_REQUEST, verified_artifact.err().unwrap().to_string())
     }
-
-    // Extract profiles from the foundry.toml file.
-
-    // Build the source directory for each profile.
-
-    // Check if any of the creation codes match the bytecode of the contract. If so, we were
-    // successful.
-
-    // None match, so return an error with some info.
-    (http::StatusCode::OK, "OK".to_string())
+    (http::StatusCode::OK, "Verified contract!".to_string())
 }
 
 async fn clone_repo_and_checkout_commit(
