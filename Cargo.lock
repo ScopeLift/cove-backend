@@ -786,6 +786,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "config",
+ "dotenvy",
  "ethers 2.0.0 (git+https://github.com/gakonst/ethers-rs)",
  "futures",
  "git2",
@@ -1052,6 +1053,12 @@ name = "dot"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a74b6c4d4a1cff5f454164363c16b72fa12463ca6b31f4b5f2035a65fa3d5906"
+
+[[package]]
+name = "dotenvy"
+version = "0.15.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03d8c417d7a8cb362e0c37e5d815f5eb7c37f79ff93707329d5a194e42e54ca0"
 
 [[package]]
 name = "dunce"

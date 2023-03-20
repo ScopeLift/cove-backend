@@ -6,6 +6,7 @@
 [dependencies]
   axum = "0.6.11"
   config = "0.13.3"
+  dotenvy = "0.15.6"
   ethers = { git = "https://github.com/gakonst/ethers-rs" }
   futures = "0.3.27"
   git2 = "0.16.1"
