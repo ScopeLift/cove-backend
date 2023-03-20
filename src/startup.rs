@@ -3,6 +3,7 @@ use axum::{
     routing::{get, post, IntoMakeService},
     Router, Server,
 };
+use dotenvy::dotenv;
 use hyper::server::conn::AddrIncoming;
 use std::net::TcpListener;
 use tower::ServiceBuilder;
@@ -13,6 +14,8 @@ use tower_http::{
 };
 
 pub fn run(listener: TcpListener) -> hyper::Result<Server<AddrIncoming, IntoMakeService<Router>>> {
+    dotenv().expect(".env file not found");
+
     // Configure service to have request IDs show up correctly in logs produced by
     // `tower_http::trace::Trace`. Modified from: https://docs.rs/tower-http/latest/tower_http/request_id/index.html#using-trace
     let trace_layer = ServiceBuilder::new()
