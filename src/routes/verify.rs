@@ -1,12 +1,14 @@
-use crate::{
-    compile,
-    provider::{contract_creation_data, provider_from_chain},
-};
+use crate::{compile, provider::MultiChainProvider};
 use axum::{http, response::IntoResponse, Json};
 use ethers::types::{Chain, TxHash};
 use git2::{Oid, Repository};
 use serde::Deserialize;
-use std::{error::Error, str::FromStr};
+use std::{
+    collections::HashMap,
+    error::Error,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use tempfile::TempDir;
 
 #[derive(Deserialize)]
@@ -14,8 +16,7 @@ pub struct VerifyData {
     repo_url: String,
     repo_commit: String,
     contract_address: String,
-    chain_id: u64,
-    // TODO Remove this and find it.
+    // TODO Remove this and find it since same creation code may have different hashes per chain.
     creation_tx_hash: String,
 }
 
@@ -32,23 +33,22 @@ pub struct VerifyData {
 pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
     let repo_url = json.repo_url.as_str();
     let commit_hash = json.repo_commit.as_str();
-    let chain_id = Chain::try_from(json.chain_id).unwrap();
-    // let chain_id =
     let tx_hash = TxHash::from_str(&json.creation_tx_hash).unwrap();
 
-    let provider = provider_from_chain(chain_id);
-    let creation_code = contract_creation_data(&provider, tx_hash).await;
+    let provider = MultiChainProvider::default();
+    let expected_creation_codes = provider.get_creation_code(tx_hash).await;
 
     // Return an error if there's no creation code for the transaction hash.
-    if creation_code.is_none() {
+    if expected_creation_codes.is_all_none() {
         return (
             http::StatusCode::BAD_REQUEST,
-            format!("No creation code for tx hash {tx_hash} on chain ID {chain_id}"),
+            format!("No creation code for tx hash {tx_hash} on any supported chain"),
         )
     }
 
     // Create a temporary directory for the cloned repository.
     let temp_dir = TempDir::new().unwrap();
+    let path = &temp_dir.path();
 
     // Clone the repository and checking out the commit.
     let maybe_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
@@ -56,11 +56,31 @@ pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
         return (http::StatusCode::BAD_REQUEST, format!("Unable to clone repository {repo_url}"))
     }
 
-    // Build the project and get the resulting output.
-    // TODO Some refactoring, ended up just doing the verification in the compile module for now.
-    let verified_artifact = compile::compile(&temp_dir.path(), creation_code.unwrap());
-    if verified_artifact.is_err() {
-        return (http::StatusCode::BAD_REQUEST, verified_artifact.err().unwrap().to_string())
+    // Get the build commands for the project.
+    let build_commands = compile::build_commands(path).unwrap();
+    let mut verified_contracts: HashMap<Chain, PathBuf> = HashMap::new();
+
+    for mut build_command in build_commands {
+        // Build the contracts.
+        std::env::set_current_dir(path).unwrap();
+        let build_result = build_command.output().unwrap();
+        if !build_result.status.success() {
+            continue // This profile might not compile, e.g. perhaps it fails with stack too deep.
+        }
+
+        let artifacts = compile::get_artifacts(Path::join(path, "out")).unwrap();
+        let matches = provider.compare_creation_code(artifacts, &expected_creation_codes);
+
+        // If two profiles match, we overwrite the first with the second. This is ok, because solc
+        // inputs to bytecode outputs are not necessarily 1:1, e.g. changing optimization settings
+        // may not change bytecode. This is likely true for other compilers too.
+        for (chain, path) in matches.iter_entries() {
+            verified_contracts.insert(*chain, path.clone());
+        }
+    }
+
+    if verified_contracts.is_empty() {
+        return (http::StatusCode::BAD_REQUEST, "No matching contracts found".to_string())
     }
     (http::StatusCode::OK, "Verified contract!".to_string())
 }
