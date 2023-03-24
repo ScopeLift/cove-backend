@@ -225,9 +225,11 @@ async fn find_creation_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dotenvy::dotenv;
     use futures::future::try_join_all;
 
     fn get_provider() -> Arc<Provider<Http>> {
+        dotenv().expect(".env file not found");
         Arc::new(Provider::<Http>::try_from(env::var("GOERLI_RPC_URL").unwrap()).unwrap())
     }
 
@@ -262,8 +264,8 @@ mod tests {
 
         #[rustfmt::skip]
         let test_cases = vec![
-            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", "0x005c7b8f0ccbd49ff8892ec0ef27058b79d9a1ed6592faaa44699cccce1aa350","Counter, CREATE"),
-            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", "0x7f0c3a53db387e9b3ff4af69c2ae9c45182ba189b2c1d3607e6a5e1cdab29fc8","UniV3Factory, CREATE"),
+            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", "0x005c7b8f0ccbd49ff8892ec0ef27058b79d9a1ed6592faaa44699cccce1aa350", "Counter, CREATE"),
+            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", "0x7f0c3a53db387e9b3ff4af69c2ae9c45182ba189b2c1d3607e6a5e1cdab29fc8", "UniV3Factory, CREATE"),
             // ("0x00000000000001ad428e4906aE43D8F9852d0dD6", "0x48ad9bd93b31a55c08cfd99b48bea139e9f448f0bff1ab03d064ae6dce09f7f6", "Seaport, CREATE2"),
         ];
 
