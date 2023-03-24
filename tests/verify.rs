@@ -10,8 +10,6 @@ async fn verify_test() {
         "repo_url": "https://github.com/ScopeLift/cove-test-repo",
         "repo_commit": "188587df6652484e64590127f6ae3038c0aa93e3",
         "contract_address": "0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4",
-        "chain_id": 5,
-        "creation_tx_hash": "0x005c7b8f0ccbd49ff8892ec0ef27058b79d9a1ed6592faaa44699cccce1aa350"
     });
     let response = client
         .post(&format!("{}/verify", app.address))
@@ -39,8 +37,6 @@ async fn verify_returns_a_400_when_repo_cannot_be_cloned() {
         "repo_url": "https://github.com/ScopeLift/non-existant-repo",
         "repo_commit": "14a113dd794d4938da7e0e12828434d666eb9a31",
         "contract_address": "0x1908e2bf4a88f91e4ef0dc72f02b8ea36bea2319",
-        "chain_id": 5,
-        "creation_tx_hash": "0x071327401d96fbc16ebbd0eea06deb1d5fe1e78593d13de5585a23c8459fd390"
     });
     let response = client
         .post(&format!("{}/verify", app.address))
@@ -62,8 +58,6 @@ async fn verify_returns_a_400_when_repo_has_no_foundry_toml() {
         "repo_url": "https://github.com/ScopeLift/scopelint",
         "repo_commit": "14a113dd794d4938da7e0e12828434d666eb9a31",
         "contract_address": "0x1908e2bf4a88f91e4ef0dc72f02b8ea36bea2319",
-        "chain_id": 5,
-        "creation_tx_hash": "0x071327401d96fbc16ebbd0eea06deb1d5fe1e78593d13de5585a23c8459fd390"
     });
     let response = client
         .post(&format!("{}/verify", app.address))
@@ -83,19 +77,15 @@ async fn verify_returns_a_400_when_data_is_missing() {
     let body1 = json!({
         "repo_commit": "abcdef1",
         "contract_address": "0x123",
-        "chain_id": "5",
-        "creation_tx_hash": "0x005c7b8f0ccbd49ff8892ec0ef27058b79d9a1ed6592faaa44699cccce1aa350"
     });
 
     let body2 = json!({
         "repo_url": "https://github.com/ScopeLift/cove-test-repo",
         "repo_commit": "abcdef1",
-        "contract_address": "0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4",
-        "chain_id": "5",
     });
 
     // TODO Test more combinations.
-    let test_cases = vec![(body1, "missing repo_url"), (body2, "missing creation_tx_hash")];
+    let test_cases = vec![(body1, "missing repo_url"), (body2, "missing contract_address")];
 
     for (invalid_body, error_message) in test_cases {
         let response = client

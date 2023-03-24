@@ -1,6 +1,6 @@
 use crate::{compile, provider::MultiChainProvider};
 use axum::{http, response::IntoResponse, Json};
-use ethers::types::{Chain, TxHash};
+use ethers::types::{Address, Chain};
 use git2::{Oid, Repository};
 use serde::Deserialize;
 use std::{
@@ -16,8 +16,6 @@ pub struct VerifyData {
     repo_url: String,
     repo_commit: String,
     contract_address: String,
-    // TODO Remove this and find it since same creation code may have different hashes per chain.
-    creation_tx_hash: String,
 }
 
 #[tracing::instrument(
@@ -27,23 +25,20 @@ pub struct VerifyData {
         repo_url = %json.repo_url,
         repo_commit = %json.repo_commit,
         contract_address = %json.contract_address,
-        creation_tx_hash = %json.creation_tx_hash,
     )
 )]
 pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
     let repo_url = json.repo_url.as_str();
     let commit_hash = json.repo_commit.as_str();
-    let tx_hash = TxHash::from_str(&json.creation_tx_hash).unwrap();
+    let contract_addr = Address::from_str(json.contract_address.as_str()).unwrap();
 
     let provider = MultiChainProvider::default();
-    let expected_creation_codes = provider.get_creation_code(tx_hash).await;
+    let creation_data = provider.get_creation_code(contract_addr).await;
 
     // Return an error if there's no creation code for the transaction hash.
-    if expected_creation_codes.is_all_none() {
-        return (
-            http::StatusCode::BAD_REQUEST,
-            format!("No creation code for tx hash {tx_hash} on any supported chain"),
-        )
+    if creation_data.is_all_none() {
+        let msg = format!("No creation code for {:?} found on any supported chain", contract_addr);
+        return (http::StatusCode::BAD_REQUEST, msg)
     }
 
     // Create a temporary directory for the cloned repository.
@@ -69,11 +64,11 @@ pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
         }
 
         let artifacts = compile::get_artifacts(Path::join(path, "out")).unwrap();
-        let matches = provider.compare_creation_code(artifacts, &expected_creation_codes);
+        let matches = provider.compare_creation_code(artifacts, &creation_data);
 
         // If two profiles match, we overwrite the first with the second. This is ok, because solc
-        // inputs to bytecode outputs are not necessarily 1:1, e.g. changing optimization settings
-        // may not change bytecode. This is likely true for other compilers too.
+        // inputs to outputs are not necessarily 1:1, e.g. changing optimization settings may not
+        // change bytecode. This is likely true for other compilers too.
         for (chain, path) in matches.iter_entries() {
             verified_contracts.insert(*chain, path.clone());
         }
