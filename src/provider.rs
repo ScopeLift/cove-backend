@@ -11,6 +11,10 @@ pub struct ContractCreation {
     creation_code: Bytes,
 }
 
+// ==============================
+// ======== Single Chain ========
+// ==============================
+
 pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     match chain {
         Chain::XDai => {
@@ -43,21 +47,13 @@ pub fn provider_url_from_chain(chain: Chain) -> String {
     }
 }
 
-pub async fn contract_creation_data(
-    provider: &Arc<Provider<Http>>,
-    tx_hash: TxHash,
-) -> Option<Bytes> {
-    provider
-        .get_transaction(tx_hash)
-        .await
-        .ok()
-        .and_then(|tx| tx.map(|tx| if tx.to.is_none() { Some(tx.input) } else { None }))
-        .flatten()
-}
-
 pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Address) -> Bytes {
     provider.get_code(address, None).await.unwrap()
 }
+
+// =============================
+// ======== Multi-Chain ========
+// =============================
 
 #[derive(Debug)]
 pub struct ChainResponse<T> {
@@ -86,19 +82,12 @@ impl Default for MultiChainProvider {
 
 impl MultiChainProvider {
     pub fn new() -> Self {
-        let params = [
-            (Chain::XDai, "GNOSIS_CHAIN_RPC_URL"),
-            (Chain::Goerli, "GOERLI_RPC_URL"),
-            (Chain::Mainnet, "MAINNET_RPC_URL"),
-            (Chain::Optimism, "OPTIMISM_RPC_URL"),
-            (Chain::Polygon, "POLYGON_RPC_URL"),
-        ];
+        let chains =
+            vec![Chain::XDai, Chain::Goerli, Chain::Mainnet, Chain::Optimism, Chain::Polygon];
 
-        let providers = params
+        let providers = chains
             .iter()
-            .map(|(chain, env_var)| {
-                (*chain, Arc::new(Provider::<Http>::try_from(env::var(*env_var).unwrap()).unwrap()))
-            })
+            .map(|chain| (*chain, provider_from_chain(*chain)))
             .collect::<HashMap<_, _>>();
 
         Self { providers }
@@ -109,16 +98,9 @@ impl MultiChainProvider {
             provider: &Arc<Provider<Http>>,
             address: Address,
         ) -> Option<ContractCreation> {
-            let creation_block = find_creation_block(provider, address).await;
-            if creation_block.is_err() {
-                return None
-            }
-            let creation_tx = find_creation_tx(provider, address, creation_block.unwrap()).await;
-            if creation_tx.is_err() {
-                None
-            } else {
-                Some(creation_tx.unwrap())
-            }
+            let creation_block = find_creation_block(provider, address).await.ok()?;
+            let creation_tx = find_creation_tx(provider, address, creation_block).await.ok()?;
+            Some(creation_tx)
         }
 
         let futures = self.providers.iter().map(|(chain, provider)| async move {
@@ -229,11 +211,11 @@ async fn find_creation_tx(
         if let Some(factory) = tx.to {
             // https://github.com/Arachnid/deterministic-deployment-proxy
             if factory == Address::from_str("0x4e59b44847b379578588920cA78FbF26c0B4956C")? {
-                // TODO
+                todo!();
             }
             // Create2 factory by 0age.
             if factory == Address::from_str("0x0000000000FFe8B47B3e2130213B802212439497")? {
-                // TODO
+                todo!();
             }
         }
     }
@@ -255,17 +237,17 @@ mod tests {
 
         // Define contract addresses with their corresponding creation blocks.
         let test_cases = vec![
-            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", BlockId::from(8666991)), /* Counter. */
-            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", BlockId::from(4734394)), /* UniswapV3Factory. */
-            ("0x00000000000001ad428e4906aE43D8F9852d0dD6", BlockId::from(8515378)), /* Seaport. */
+            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", BlockId::from(8666991), "Counter"),
+            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", BlockId::from(4734394), "UniV3Factory"),
+            ("0x00000000000001ad428e4906aE43D8F9852d0dD6", BlockId::from(8515378), "Seaport"),
         ];
 
-        let tasks = test_cases.into_iter().map(|(contract, expected_block)| {
+        let tasks = test_cases.into_iter().map(|(contract, expected_block, name)| {
             let provider = provider.clone();
             async move {
                 let contract_addr = Address::from_str(contract)?;
                 let creation_block = find_creation_block(&provider, contract_addr).await?;
-                assert_eq!(creation_block, expected_block);
+                assert_eq!(creation_block, expected_block, "{name}");
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             }
         });
@@ -280,15 +262,12 @@ mod tests {
 
         #[rustfmt::skip]
         let test_cases = vec![
-            // Counter, CREATE.
-            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", "0x005c7b8f0ccbd49ff8892ec0ef27058b79d9a1ed6592faaa44699cccce1aa350"),
-            // UniswapV3Factory, CREATE.
-            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", "0x7f0c3a53db387e9b3ff4af69c2ae9c45182ba189b2c1d3607e6a5e1cdab29fc8"),
-            // Seaport, CREATE2, not yet supported.
-            // ("0x00000000000001ad428e4906aE43D8F9852d0dD6", "0x48ad9bd93b31a55c08cfd99b48bea139e9f448f0bff1ab03d064ae6dce09f7f6"),
+            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", "0x005c7b8f0ccbd49ff8892ec0ef27058b79d9a1ed6592faaa44699cccce1aa350","Counter, CREATE"),
+            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", "0x7f0c3a53db387e9b3ff4af69c2ae9c45182ba189b2c1d3607e6a5e1cdab29fc8","UniV3Factory, CREATE"),
+            // ("0x00000000000001ad428e4906aE43D8F9852d0dD6", "0x48ad9bd93b31a55c08cfd99b48bea139e9f448f0bff1ab03d064ae6dce09f7f6", "Seaport, CREATE2"),
         ];
 
-        let tasks = test_cases.into_iter().map(|(contract, tx_hash)| {
+        let tasks = test_cases.into_iter().map(|(contract, tx_hash, name)| {
             let provider = provider.clone();
             async move {
                 let contract_addr = Address::from_str(contract)?;
@@ -296,7 +275,7 @@ mod tests {
                 let creation_block = find_creation_block(&provider, contract_addr).await?;
                 let creation_tx =
                     find_creation_tx(&provider, contract_addr, creation_block).await?;
-                assert_eq!(creation_tx.tx_hash, expected_tx_hash);
+                assert_eq!(creation_tx.tx_hash, expected_tx_hash, "{name}");
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             }
         });
