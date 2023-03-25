@@ -6,9 +6,9 @@ use futures::future;
 use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
 
 pub struct ContractCreation {
-    tx_hash: TxHash,
-    block: BlockId,
-    creation_code: Bytes,
+    pub tx_hash: TxHash,
+    pub block: BlockId,
+    pub creation_code: Bytes,
 }
 
 // ==============================
@@ -57,7 +57,7 @@ pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Addr
 
 #[derive(Debug)]
 pub struct ChainResponse<T> {
-    responses: HashMap<Chain, Option<T>>,
+    pub responses: HashMap<Chain, Option<T>>,
 }
 
 impl<T> ChainResponse<T> {
@@ -71,7 +71,7 @@ impl<T> ChainResponse<T> {
 }
 
 pub struct MultiChainProvider {
-    providers: HashMap<Chain, Arc<Provider<Http>>>,
+    pub providers: HashMap<Chain, Arc<Provider<Http>>>,
 }
 
 impl Default for MultiChainProvider {

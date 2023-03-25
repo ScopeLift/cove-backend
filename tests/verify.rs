@@ -9,7 +9,7 @@ async fn verify_test() {
     let body = json!({
         "repo_url": "https://github.com/ScopeLift/cove-test-repo",
         "repo_commit": "188587df6652484e64590127f6ae3038c0aa93e3",
-        "contract_address": "0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4",
+        "contract_address": "0x406B940c7154eDB4Aa2B20CA62fC9A7e70fbe435",
     });
     let response = client
         .post(&format!("{}/verify", app.address))
