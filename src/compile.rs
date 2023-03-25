@@ -14,14 +14,21 @@ pub fn build_commands<P: AsRef<Path>>(path: &P) -> Result<Vec<Command>, Box<dyn 
     if !is_foundry_project(path) {
         return Err("Currently only non-monorepo foundry projects are supported.".into())
     }
+    println!("  Detected forge project.");
 
     let config_file = path.as_ref().join("foundry.toml");
     let profile_names = foundry_profiles(&config_file)?;
+    println!("  Found profiles: {:?}", profile_names);
     let commands = profile_names
         .into_iter()
         .map(|profile_name| {
             let mut command = Command::new("forge");
-            command.arg("build").arg("--skip").arg("test").env("FOUNDRY_PROFILE", profile_name);
+            command
+                .arg("build")
+                .arg("--skip")
+                .arg("test")
+                .arg("script")
+                .env("FOUNDRY_PROFILE", profile_name);
             command
         })
         .collect::<Vec<Command>>();

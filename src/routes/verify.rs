@@ -67,52 +67,81 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     let repo_url = json.repo_url.as_str();
     let commit_hash = json.repo_commit.as_str();
     let contract_addr = Address::from_str(json.contract_address.as_str()).unwrap();
+    println!("VERIFICATION INPUTS:");
+    println!("  Repo URL:         {}", repo_url);
+    println!("  Commit Hash:      {}", commit_hash);
+    println!("  Contract Address: {:?}", contract_addr);
 
+    println!("\nFETCHING CREATION CODE");
     let provider = MultiChainProvider::default();
     let creation_data = provider.get_creation_code(contract_addr).await;
 
     // Return an error if there's no creation code for the transaction hash.
     if creation_data.is_all_none() {
+        println!("  Creation code not found, returning error.");
         let msg = format!("No creation code for {:?} found on any supported chain", contract_addr);
         return (StatusCode::BAD_REQUEST, msg).into_response()
     }
+    println!("  Found creation code on the following chains: {:?}", creation_data.responses.keys());
 
     // Create a temporary directory for the cloned repository.
     let temp_dir = TempDir::new().unwrap();
     let path = &temp_dir.path();
 
     // Clone the repository and checking out the commit.
+    println!("\nCLONING REPOSITORY");
     let maybe_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
     if maybe_repo.is_err() {
+        println!("  Unable to clone repository, returning error.");
         return (StatusCode::BAD_REQUEST, format!("Unable to clone repository {repo_url}"))
             .into_response()
     }
+    println!("  Repository cloned successfully.");
 
     // Get the build commands for the project.
+    println!("\nBUILDING CONTRACTS AND COMPARING BYTECODE");
     let build_commands = compile::build_commands(path).unwrap();
     let mut verified_contracts: HashMap<Chain, PathBuf> = HashMap::new();
 
     for mut build_command in build_commands {
+        println!("  Building with command: {}", format!("{:?}", build_command).replace("\"", ""));
+
         // Build the contracts.
         std::env::set_current_dir(path).unwrap();
         let build_result = build_command.output().unwrap();
         if !build_result.status.success() {
+            println!("    Build failed, continuing to next build command.");
             continue // This profile might not compile, e.g. perhaps it fails with stack too deep.
         }
+        println!("    Build succeeded, comparing creation code.");
 
         let artifacts = compile::get_artifacts(Path::join(path, "out")).unwrap();
         let matches = provider.compare_creation_code(artifacts, &creation_data);
+
+        if matches.is_all_none() {
+            println!("    No matching contracts found, continuing to next build command.");
+        }
 
         // If two profiles match, we overwrite the first with the second. This is ok, because solc
         // inputs to outputs are not necessarily 1:1, e.g. changing optimization settings may not
         // change bytecode. This is likely true for other compilers too.
         for (chain, path) in matches.iter_entries() {
+            // Extract contract name from path by removing the extension
+            let stem = path.file_stem().unwrap();
+            println!("    ✅ Found matching contract on chain {:?}: {:?}", chain, stem);
             verified_contracts.insert(*chain, path.clone());
         }
     }
 
     if verified_contracts.is_empty() {
         return (StatusCode::BAD_REQUEST, "No matching contracts found".to_string()).into_response()
+    }
+
+    // If multiple matches found, tell user we are choosing one.
+    if verified_contracts.len() > 1 {
+        println!("\nCONTRACT VERIFICATION SUCCESSFUL!");
+        println!("\nPREPARING RESPONSE");
+        println!("  Multiple matching contracts found, choosing Optimism arbitrarily.");
     }
 
     // Format response. If there are multiple chains we verified on, we just return an arbitrary one
@@ -166,6 +195,7 @@ async fn clone_repo_and_checkout_commit(
 ) -> Result<Repository, Box<dyn Error + Send + Sync>> {
     // Clone the repository.
     let repo = Repository::clone(repo_url, temp_dir.path())?;
+    println!("  Repository cloned.");
 
     // Find the specified commit (object ID).
     let oid = Oid::from_str(commit_hash)?;
@@ -179,6 +209,7 @@ async fn clone_repo_and_checkout_commit(
     repo.checkout_tree(&obj, None)?;
 
     repo.set_head(&("refs/heads/".to_owned() + commit_hash))?;
+    println!("  Checked out specified commit.");
 
     // Drop objects that have references to the repo so that we can return it.
     drop(branch);
