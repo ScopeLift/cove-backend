@@ -10,5 +10,6 @@ async fn main() -> hyper::Result<()> {
     let configuration = config::get_configuration().expect("Failed to read configuration.");
     let address = format!("{}:{}", configuration.application.host, configuration.application.port);
     let listener = TcpListener::bind(address).expect("Unable to bind to port");
+    println!("Listening on {}", listener.local_addr().unwrap());
     startup::run(listener)?.await
 }

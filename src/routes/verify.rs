@@ -28,6 +28,7 @@ pub struct VerifyData {
     )
 )]
 pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
+    let mut found_chains = "".to_string();
     let repo_url = json.repo_url.as_str();
     let commit_hash = json.repo_commit.as_str();
     let contract_addr = Address::from_str(json.contract_address.as_str()).unwrap();
@@ -70,14 +71,20 @@ pub async fn verify(Json(json): Json<VerifyData>) -> impl IntoResponse {
         // inputs to outputs are not necessarily 1:1, e.g. changing optimization settings may not
         // change bytecode. This is likely true for other compilers too.
         for (chain, path) in matches.iter_entries() {
+            println!("Found contract on chain {:?}: ", chain);
             verified_contracts.insert(*chain, path.clone());
+
+            // test if the string found_chains has the chain already
+            if !found_chains.contains(&format!("{:?}", chain)) {
+                found_chains.push_str(&format!("{:?} ", chain));
+            }
         }
     }
 
     if verified_contracts.is_empty() {
         return (http::StatusCode::BAD_REQUEST, "No matching contracts found".to_string())
     }
-    (http::StatusCode::OK, "Verified contract!".to_string())
+    (http::StatusCode::OK, format!("Chains containing verified contract: {}", found_chains))
 }
 
 async fn clone_repo_and_checkout_commit(

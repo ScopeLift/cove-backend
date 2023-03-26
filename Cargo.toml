@@ -18,7 +18,8 @@
   tokio = { version = "1.26.0", features = ["full"] }
   toml = "0.7.3"
   tower = "0.4.13"
-  tower-http = { version = "0.4.0", features = ["trace", "request-id", "util"] }
+  tower-http = { version = "0.4.0", features = ["trace", "request-id", "util", "cors"] }
+  headers = "0.3.8"
   tracing = "0.1.37"
   tracing-bunyan-formatter = "0.3.6"
   tracing-log = "0.1.3"
