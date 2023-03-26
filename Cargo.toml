@@ -10,6 +10,7 @@
   ethers = { git = "https://github.com/gakonst/ethers-rs" }
   futures = "0.3.27"
   git2 = "0.16.1"
+  headers = "0.3.8"
   heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs.git", version = "0.4.0" }
   hyper = "0.14.25"
   serde = { version = "1.0.155", features = ["derive"] }
@@ -18,7 +19,12 @@
   tokio = { version = "1.26.0", features = ["full"] }
   toml = "0.7.3"
   tower = "0.4.13"
-  tower-http = { version = "0.4.0", features = ["trace", "request-id", "util"] }
+  tower-http = { version = "0.4.0", features = [
+    "trace",
+    "request-id",
+    "util",
+    "cors",
+  ] }
   tracing = "0.1.37"
   tracing-bunyan-formatter = "0.3.6"
   tracing-log = "0.1.3"

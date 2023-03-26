@@ -19,6 +19,7 @@ pub fn build_commands<P: AsRef<Path>>(path: &P) -> Result<Vec<Command>, Box<dyn 
     let config_file = path.as_ref().join("foundry.toml");
     let profile_names = foundry_profiles(&config_file)?;
     println!("  Found profiles: {:?}", profile_names);
+    let profile_names = vec!["optimized".to_string()]; // TODO temporary seaport hack
     let commands = profile_names
         .into_iter()
         .map(|profile_name| {

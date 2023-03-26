@@ -1,6 +1,6 @@
 use ethers::{
     providers::{Http, Middleware, Provider},
-    types::{Address, BlockId, Bytes, Chain, TxHash},
+    types::{Address, BlockId, Bytes, Chain, TxHash, U256},
 };
 use futures::future;
 use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
@@ -125,11 +125,16 @@ impl MultiChainProvider {
                 if let Some(bytecode_value) = json.get("bytecode").unwrap().get("object") {
                     if let Some(bytecode_str) = bytecode_value.as_str() {
                         let bytecode = Bytes::from_str(bytecode_str).unwrap();
-                        // TODO This check won't always work, e.g. constructor args, metadata hash,
-                        // etc.
+
+                        // First just try a simple equality check.
                         if bytecode == expected_creation_data.creation_code {
                             return Some(artifact)
                         }
+
+                        // If that didn't work, we account for the constructor, immutables, and
+                        // metadata hash. First we get all immutable
+                        // references from the artifact and slice them out of the bytecode.
+                        // TODO make this better, put back improved version of the seaport stuff.
                     }
                 }
             }
@@ -208,6 +213,7 @@ async fn find_creation_tx(
 
         // Contract was deployed from a factory. For now, to avoid tracing, we hardcode a few known,
         // popular create2 factories.
+        // TODO Currently assumes the first found transaction hash is the right one.
         if let Some(factory) = tx.to {
             // https://github.com/Arachnid/deterministic-deployment-proxy
             if factory == Address::from_str("0x4e59b44847b379578588920cA78FbF26c0B4956C")? {
@@ -215,7 +221,20 @@ async fn find_creation_tx(
             }
             // Create2 factory by 0age.
             if factory == Address::from_str("0x0000000000FFe8B47B3e2130213B802212439497")? {
-                todo!();
+                // The only function on this deployer is:
+                //   `function safeCreate2(bytes32 salt, bytes calldata initializationCode)`
+                // so we know that method was called and can extract the creation code. The input
+                // data is structured as follows:
+                //   - Bytes 1-4: Function selector
+                //   - Bytes 5-36: Salt
+                //   - Bytes 37-68: Offset to creation code data
+                //   - Bytes 69-100: Offset to creation code length
+
+                let len = &tx.input[69..100];
+                let len = U256::from(len).as_usize() + 100; // TODO Why, without this, is the code 100 bytes short?
+                let creation_code = &tx.input[100..len];
+                let creation_code = Bytes::from_iter(creation_code);
+                return Ok(ContractCreation { tx_hash, block, creation_code })
             }
         }
     }

@@ -4,10 +4,12 @@ use axum::{
     Router, Server,
 };
 use dotenvy::dotenv;
-use hyper::server::conn::AddrIncoming;
+use headers::HeaderName;
+use hyper::{server::conn::AddrIncoming, Method};
 use std::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{
+    cors::{Any, CorsLayer},
     request_id::MakeRequestUuid,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
     ServiceBuilderExt,
@@ -29,12 +31,22 @@ pub fn run(listener: TcpListener) -> hyper::Result<Server<AddrIncoming, IntoMake
         // Propagate the header to the response before the response reaches `TraceLayer`.
         .propagate_x_request_id();
 
+    // Setup CORS for all endpoints of our application.
+    let cors_layer = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(vec![Method::GET, Method::POST])
+        .allow_headers(vec![
+            HeaderName::from_static("content-type"),
+            HeaderName::from_static("authorization"),
+        ]);
+
     // Build our application with a single route.
     let app = Router::new()
         .route("/health_check", get(routes::health_check))
         .route("/verify", post(routes::verify))
         .route("/contract", get(routes::contract))
-        .layer(trace_layer);
+        .layer(trace_layer)
+        .layer(cors_layer);
 
     // Run it with hyper on the given TcpListener.
     Ok(axum::Server::from_tcp(listener)?.serve(app.into_make_service()))

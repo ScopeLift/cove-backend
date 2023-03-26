@@ -11,6 +11,11 @@ async fn verify_test() {
         "repo_commit": "188587df6652484e64590127f6ae3038c0aa93e3",
         "contract_address": "0x406B940c7154eDB4Aa2B20CA62fC9A7e70fbe435",
     });
+    let body = json!({
+        "repo_url": "https://github.com/ProjectOpenSea/seaport",
+        "repo_commit": "d58a91d218b0ab557543c8a292710aa36e693973",
+        "contract_address": "0x00000000000001ad428e4906aE43D8F9852d0dD6",
+    });
     let response = client
         .post(&format!("{}/verify", app.address))
         .header("Content-Type", "application/json")
