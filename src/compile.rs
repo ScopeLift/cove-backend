@@ -29,6 +29,9 @@ pub fn build_commands<P: AsRef<Path>>(path: &P) -> Result<Vec<Command>, Box<dyn 
                 .arg("--skip")
                 .arg("test")
                 .arg("script")
+                .arg("--build-info")
+                .arg("--build-info-path")
+                .arg("build_info")
                 .env("FOUNDRY_PROFILE", profile_name);
             command
         })
