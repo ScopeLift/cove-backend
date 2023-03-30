@@ -9,7 +9,6 @@
   dotenvy = "0.15.6"
   ethers = { git = "https://github.com/gakonst/ethers-rs" }
   futures = "0.3.27"
-  git2 = "0.16.1"
   headers = "0.3.8"
   heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs.git", version = "0.4.0" }
   hyper = "0.14.25"
