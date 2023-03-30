@@ -32,7 +32,8 @@ pub fn build_commands<P: AsRef<Path>>(path: &P) -> Result<Vec<Command>, Box<dyn 
                 .arg("--build-info")
                 .arg("--build-info-path")
                 .arg("build_info")
-                .env("FOUNDRY_PROFILE", profile_name);
+                .env("FOUNDRY_PROFILE", profile_name)
+                .env("FOUNDRY_BYTECODE_HASH", "none"); // TODO Account for bytecode hash later.
             command
         })
         .collect::<Vec<Command>>();
