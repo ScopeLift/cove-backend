@@ -9,7 +9,6 @@ use axum::{
     Json,
 };
 use ethers::types::{Address, BlockId, Bytes, Chain, TxHash};
-use git2::{Oid, Repository};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -17,6 +16,7 @@ use std::{
     error::Error,
     fs,
     path::{Path, PathBuf},
+    process::Command,
     str::FromStr,
 };
 use tempfile::TempDir;
@@ -280,30 +280,33 @@ async fn clone_repo_and_checkout_commit(
     repo_url: &str,
     commit_hash: &str,
     temp_dir: &TempDir,
-) -> Result<Repository, Box<dyn Error + Send + Sync>> {
-    // Clone the repository.
-    let repo = Repository::clone(repo_url, temp_dir.path())?;
-    println!("  Repository cloned.");
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    println!("  Cloning repository into a temporary directory.");
+    let status = Command::new("git")
+        .arg("clone")
+        .arg(repo_url)
+        .arg(temp_dir.path())
+        .arg("--quiet")
+        .status()?;
 
-    // Find the specified commit (object ID).
-    let oid = Oid::from_str(commit_hash)?;
-    let commit = repo.find_commit(oid)?;
+    if !status.success() {
+        return Err(format!("Failed to clone the repository. Exit status: {}", status).into())
+    }
 
-    // Create a branch for the commit.
-    let branch = repo.branch(commit_hash, &commit, false);
+    let cwd = std::env::current_dir()?;
+    std::env::set_current_dir(temp_dir.path())?;
 
-    // Checkout the commit.
-    let obj = repo.revparse_single(&("refs/heads/".to_owned() + commit_hash)).unwrap();
-    repo.checkout_tree(&obj, None)?;
+    println!("  Checking out the given commit.");
+    let status = Command::new("git").arg("checkout").arg(commit_hash).arg("--quiet").status()?;
 
-    repo.set_head(&("refs/heads/".to_owned() + commit_hash))?;
-    println!("  Checked out specified commit.");
+    if !status.success() {
+        return Err(format!("Failed to checkout the commit. Exit status: {}", status).into())
+    }
 
-    // Drop objects that have references to the repo so that we can return it.
-    drop(branch);
-    drop(commit);
-    drop(obj);
-    Ok(repo)
+    std::env::set_current_dir(cwd)?;
+    println!("  Done.");
+
+    Ok(())
 }
 
 // ======================================
