@@ -83,7 +83,10 @@ impl Default for MultiChainProvider {
 impl MultiChainProvider {
     pub fn new() -> Self {
         let chains =
-            vec![Chain::XDai, Chain::Goerli, Chain::Mainnet, Chain::Optimism, Chain::Polygon];
+            // Gnosis Chain fails to binary search with: `No state available for block 13600864`. Need to
+            // get access an archive node to get the binary search working.
+            // vec![Chain::XDai, Chain::Goerli, Chain::Mainnet, Chain::Optimism, Chain::Polygon];
+            vec![Chain::Goerli, Chain::Mainnet, Chain::Optimism, Chain::Polygon];
 
         let providers = chains
             .iter()
@@ -131,10 +134,20 @@ impl MultiChainProvider {
                             return Some(artifact)
                         }
 
-                        // If that didn't work, we account for the constructor, immutables, and
-                        // metadata hash. First we get all immutable
-                        // references from the artifact and slice them out of the bytecode.
-                        // TODO make this better, put back improved version of the seaport stuff.
+                        // Let's try accounting for constructor arguments now. We do this by
+                        // defining equality as:
+                        //   - The expected creation code is longer than the artifact creation code.
+                        //   - The expected creation code and found creation code match up to byte
+                        //     `n`, where `n` is the length of the found bytecode.
+                        let equal_len = expected_creation_data.creation_code.len() > bytecode.len();
+                        let bytes_match = bytecode
+                            .iter()
+                            .zip(expected_creation_data.creation_code.iter())
+                            .all(|(a_byte, b_byte)| a_byte == b_byte);
+
+                        if equal_len && bytes_match {
+                            return Some(artifact)
+                        }
                     }
                 }
             }
@@ -173,6 +186,8 @@ async fn find_creation_block(
     // Binary search to find the block where the contract was created.
     // TODO Consider biasing this towards recent blocks to reduce RPC requests. Currently the max
     // number of RPC requests used is log2(num_blocks). For 17M mainnet blocks this is 24 RPC calls.
+    // TODO manually override low block for gnosis chain because it errors with `No state available
+    // for block 13600864`.
     let mut low = 0;
     let mut high = latest_block_num;
     while low < high {
@@ -229,7 +244,6 @@ async fn find_creation_tx(
                 //   - Bytes 5-36: Salt
                 //   - Bytes 37-68: Offset to creation code data
                 //   - Bytes 69-100: Offset to creation code length
-
                 let len = &tx.input[69..100];
                 let len = U256::from(len).as_usize() + 100; // TODO Why, without this, is the code 100 bytes short?
                 let creation_code = &tx.input[100..len];
@@ -285,7 +299,7 @@ mod tests {
         let test_cases = vec![
             ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", "0x005c7b8f0ccbd49ff8892ec0ef27058b79d9a1ed6592faaa44699cccce1aa350", "Counter, CREATE"),
             ("0x1F98431c8aD98523631AE4a59f267346ea31F984", "0x7f0c3a53db387e9b3ff4af69c2ae9c45182ba189b2c1d3607e6a5e1cdab29fc8", "UniV3Factory, CREATE"),
-            // ("0x00000000000001ad428e4906aE43D8F9852d0dD6", "0x48ad9bd93b31a55c08cfd99b48bea139e9f448f0bff1ab03d064ae6dce09f7f6", "Seaport, CREATE2"),
+            ("0x00000000000001ad428e4906aE43D8F9852d0dD6", "0x48ad9bd93b31a55c08cfd99b48bea139e9f448f0bff1ab03d064ae6dce09f7f6", "Seaport, CREATE2"),
         ];
 
         let tasks = test_cases.into_iter().map(|(contract, tx_hash, name)| {

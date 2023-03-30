@@ -6,11 +6,11 @@ async fn verify_test() {
     let app = common::spawn_app().await;
     let client = reqwest::Client::new();
 
-    let body = json!({
-        "repo_url": "https://github.com/ScopeLift/cove-test-repo",
-        "repo_commit": "188587df6652484e64590127f6ae3038c0aa93e3",
-        "contract_address": "0x406B940c7154eDB4Aa2B20CA62fC9A7e70fbe435",
-    });
+    // let body = json!({
+    //     "repo_url": "https://github.com/ScopeLift/cove-test-repo",
+    //     "repo_commit": "188587df6652484e64590127f6ae3038c0aa93e3",
+    //     "contract_address": "0x406B940c7154eDB4Aa2B20CA62fC9A7e70fbe435",
+    // });
     let body = json!({
         "repo_url": "https://github.com/ProjectOpenSea/seaport",
         "repo_commit": "d58a91d218b0ab557543c8a292710aa36e693973",
@@ -25,7 +25,7 @@ async fn verify_test() {
         .expect("Failed to execute request.");
 
     println!("status   {:?}", response.status());
-    println!("response {:?}", response.text().await);
+    // println!("response {:?}", response.text().await);
 
     // assert_eq!(200, response.status().as_u16());
 
