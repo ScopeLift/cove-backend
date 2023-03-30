@@ -48,6 +48,7 @@ struct SuccessfulVerification {
     creation_tx_hash: TxHash,
     creation_block_number: u64,
     creation_code: Bytes,
+    sources: Vec<SourceFile>,
     runtime_code: Bytes,
     creation_code_source_map: String,
     runtime_code_source_map: String,
@@ -55,6 +56,37 @@ struct SuccessfulVerification {
     compiler_info: CompilerInfo,
     ast: Ast,
 }
+
+// Types used for getting sources
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct BuildInfo {
+    _format: String,
+    solc_version: String,
+    solc_long_version: String,
+    input: InputField,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct InputField {
+    language: String,
+    sources: HashMap<String, SourceInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct SourceInfo {
+    content: String,
+}
+
+#[derive(Serialize)]
+struct SourceFile {
+    path: String,
+    content: String,
+}
+
+// ===================================
+// ======== Main verification ========
+// ===================================
 
 // #[tracing::instrument(
 //     name = "Verifying contract",
@@ -145,17 +177,66 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
         println!("  Multiple matching contracts found, choosing Optimism arbitrarily.");
     }
 
+    // ======== Format Response ========
     // Format response. If there are multiple chains we verified on, we just return an arbitrary one
     // for now. For now we just hardcode Optimism for demo purposes.
+
+    // Get the artifact for the contract.
     let artifact_path = verified_contracts.get(&Chain::Optimism).unwrap();
     let artifact_content = fs::read_to_string(artifact_path).unwrap();
     let artifact: Root = serde_json::from_str(&artifact_content).unwrap();
 
+    // Extract the compiler data.
     let compiler_info = CompilerInfo {
         name: artifact.metadata.language,
         version: artifact.metadata.compiler.version,
     };
 
+    //  -------- Assemble the source code --------
+    // First we get the path of the most-derived contract, i.e. the one that was verified that we
+    // want first in the vector.
+    let first_contract_path = artifact.metadata.settings.compilation_target.keys().next().unwrap();
+    // Since the key names will always differ, we read them into a hash map.
+    let source_file_names: Vec<String> = artifact.metadata.sources.keys().cloned().collect();
+
+    // Next we read the build info file which has all the source code already stringified. We don't
+    // know the name of this file (since it's a hash), but it's the only file in the directory.
+    let build_info_dir = temp_dir.path().join("build_info");
+    let build_info_file = fs::read_dir(build_info_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|entry| entry.path().extension().unwrap_or_default() == "json")
+        .ok_or(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "JSON file not found in build_info directory",
+        ))
+        .unwrap();
+    let build_info_content = fs::read_to_string(build_info_file.path()).unwrap();
+
+    // Now we merge the data into our sources vector.
+    let build_info: BuildInfo = serde_json::from_str(&build_info_content).unwrap();
+    let mut sources: Vec<SourceFile> = source_file_names
+        .iter()
+        .filter_map(|path| {
+            build_info.input.sources.get(path).map(|source_info| SourceFile {
+                path: path.clone(),
+                content: source_info.content.clone(),
+            })
+        })
+        .collect();
+
+    // Lastly, we put the root source file first.
+    sources.sort_by(|a, b| {
+        if &a.path == first_contract_path {
+            std::cmp::Ordering::Less
+        } else if &b.path == first_contract_path {
+            std::cmp::Ordering::Greater
+        } else {
+            a.path.cmp(&b.path)
+        }
+    });
+
+    // Get the creation data.
     let block = creation_data.responses.get(&Chain::Optimism).unwrap().as_ref().unwrap().block;
     let block_num = match block {
         BlockId::Number(num) => num.as_number().unwrap(),
@@ -165,12 +246,14 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     let selected_creation_data =
         creation_data.responses.get(&Chain::Optimism).unwrap().as_ref().unwrap();
 
+    // Assemble and return the response.
     let response = SuccessfulVerification {
         repo_url: repo_url.to_string(),
         repo_commit: commit_hash.to_string(),
         contract_address: contract_addr,
         chains: verified_contracts.keys().copied().collect(),
         chain: Chain::Optimism, // TODO Un-hardcode this
+        sources,
         creation_tx_hash: selected_creation_data.tx_hash,
         creation_block_number: block_num.as_u64(),
         creation_code: selected_creation_data.creation_code.clone(),
@@ -226,6 +309,11 @@ async fn clone_repo_and_checkout_commit(
 // ======== Forge Artifact Types ========
 // ======================================
 // These were auto-generated by pasting an artifact into https://transform.tools/json-to-rust-serde.
+// TODO Make these generic: currently have seaport stuff hardcoded.
+
+// ===============================
+// ======== Seaport types ========
+// ===============================
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,12 +331,15 @@ pub struct Root {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Abi {
+    #[serde(default)]
     pub inputs: Vec<Input>,
-    pub name: String,
-    pub outputs: Vec<Output>,
-    pub state_mutability: String,
+    pub state_mutability: Option<String>,
     #[serde(rename = "type")]
     pub type_field: String,
+    pub name: Option<String>,
+    pub anonymous: Option<bool>,
+    #[serde(default)]
+    pub outputs: Vec<Output>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -258,11 +349,65 @@ pub struct Input {
     pub name: String,
     #[serde(rename = "type")]
     pub type_field: String,
+    pub indexed: Option<bool>,
+    #[serde(default)]
+    pub components: Vec<Component>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component {
+    #[serde(default)]
+    pub components: Vec<Component2>,
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component2 {
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    #[serde(default)]
+    pub components: Vec<Component3>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component3 {
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Output {
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub components: Option<Vec<Component4>>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component4 {
+    pub components: Option<Vec<Component5>>,
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component5 {
     pub internal_type: String,
     pub name: String,
     #[serde(rename = "type")]
@@ -287,6 +432,7 @@ pub struct DeployedBytecode {
     pub object: String,
     pub source_map: String,
     pub link_references: LinkReferences2,
+    pub immutable_references: ImmutableReferences,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -295,13 +441,179 @@ pub struct LinkReferences2 {}
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImmutableReferences {
+    #[serde(rename = "24278")]
+    pub n24278: Vec<n24278>,
+    #[serde(rename = "24280")]
+    pub n24280: Vec<n24280>,
+    #[serde(rename = "24282")]
+    pub n24282: Vec<n24282>,
+    #[serde(rename = "24284")]
+    pub n24284: Vec<n24284>,
+    #[serde(rename = "24286")]
+    pub n24286: Vec<n24286>,
+    #[serde(rename = "24288")]
+    pub n24288: Vec<n24288>,
+    #[serde(rename = "24290")]
+    pub n24290: Vec<n24290>,
+    #[serde(rename = "24292")]
+    pub n24292: Vec<n24292>,
+    #[serde(rename = "24295")]
+    pub n24295: Vec<n24295>,
+    #[serde(rename = "24297")]
+    pub n24297: Vec<n24297>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24278 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24280 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24282 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24284 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24286 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24288 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24290 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24292 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24295 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(non_camel_case_types)]
+pub struct n24297 {
+    pub start: i64,
+    pub length: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MethodIdentifiers {
-    #[serde(rename = "increment()")]
-    pub increment: String,
-    #[serde(rename = "number()")]
-    pub number: String,
-    #[serde(rename = "setNumber(uint256)")]
-    pub set_number_uint256: String,
+    #[serde(
+        rename = "cancel((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256)[])"
+    )]
+    pub cancel_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256:
+        String,
+    #[serde(
+        rename = "fulfillAdvancedOrder(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes),(uint256,uint8,uint256,uint256,bytes32[])[],bytes32,address)"
+    )]
+    pub fulfill_advanced_order_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_bytes32_address:
+        String,
+    #[serde(
+        rename = "fulfillAvailableAdvancedOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes)[],(uint256,uint8,uint256,uint256,bytes32[])[],(uint256,uint256)[][],(uint256,uint256)[][],bytes32,address,uint256)"
+    )]
+    pub fulfill_available_advanced_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_uint256_uint256_uint256_uint256_bytes32_address_uint256:
+        String,
+    #[serde(
+        rename = "fulfillAvailableOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[],(uint256,uint256)[][],(uint256,uint256)[][],bytes32,uint256)"
+    )]
+    pub fulfill_available_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_uint256_uint256_uint256_uint256_bytes32_uint256:
+        String,
+    #[serde(
+        rename = "fulfillBasicOrder((address,uint256,uint256,address,address,address,uint256,uint256,uint8,uint256,uint256,bytes32,uint256,bytes32,bytes32,uint256,(uint256,address)[],bytes))"
+    )]
+    pub fulfill_basic_order_address_uint256_uint256_address_address_address_uint256_uint256_uint8_uint256_uint256_bytes32_uint256_bytes32_bytes32_uint256_uint256_address_bytes:
+        String,
+    #[serde(
+        rename = "fulfillBasicOrder_efficient_6GL6yc((address,uint256,uint256,address,address,address,uint256,uint256,uint8,uint256,uint256,bytes32,uint256,bytes32,bytes32,uint256,(uint256,address)[],bytes))"
+    )]
+    pub fulfill_basic_order_efficient_6gl6yc_address_uint256_uint256_address_address_address_uint256_uint256_uint8_uint256_uint256_bytes32_uint256_bytes32_bytes32_uint256_uint256_address_bytes:
+        String,
+    #[serde(
+        rename = "fulfillOrder(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes),bytes32)"
+    )]
+    pub fulfill_order_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_bytes32:
+        String,
+    #[serde(rename = "getContractOffererNonce(address)")]
+    pub get_contract_offerer_nonce_address: String,
+    #[serde(rename = "getCounter(address)")]
+    pub get_counter_address: String,
+    #[serde(
+        rename = "getOrderHash((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256))"
+    )]
+    pub get_order_hash_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256:
+        String,
+    #[serde(rename = "getOrderStatus(bytes32)")]
+    pub get_order_status_bytes32: String,
+    #[serde(rename = "incrementCounter()")]
+    pub increment_counter: String,
+    #[serde(rename = "information()")]
+    pub information: String,
+    #[serde(
+        rename = "matchAdvancedOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes)[],(uint256,uint8,uint256,uint256,bytes32[])[],((uint256,uint256)[],(uint256,uint256)[])[],address)"
+    )]
+    pub match_advanced_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_uint256_uint256_uint256_uint256_address:
+        String,
+    #[serde(
+        rename = "matchOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[],((uint256,uint256)[],(uint256,uint256)[])[])"
+    )]
+    pub match_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_uint256_uint256_uint256_uint256:
+        String,
+    #[serde(rename = "name()")]
+    pub name: String,
+    #[serde(
+        rename = "validate(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[])"
+    )]
+    pub validate_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes:
+        String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -311,7 +623,7 @@ pub struct Metadata {
     pub language: String,
     pub output: Output2,
     pub settings: Settings,
-    pub sources: Sources,
+    pub sources: HashMap<String, Source>,
     pub version: i64,
 }
 
@@ -333,10 +645,11 @@ pub struct Output2 {
 #[serde(rename_all = "camelCase")]
 pub struct Abi2 {
     pub inputs: Vec<Input2>,
-    pub state_mutability: String,
+    pub state_mutability: Option<String>,
     #[serde(rename = "type")]
     pub type_field: String,
-    pub name: String,
+    pub name: Option<String>,
+    pub anonymous: Option<bool>,
     #[serde(default)]
     pub outputs: Vec<Output3>,
 }
@@ -348,11 +661,65 @@ pub struct Input2 {
     pub name: String,
     #[serde(rename = "type")]
     pub type_field: String,
+    pub indexed: Option<bool>,
+    #[serde(default)]
+    pub components: Vec<Component6>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component6 {
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    #[serde(default)]
+    pub components: Vec<Component7>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component7 {
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    #[serde(default)]
+    pub components: Vec<Component8>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component8 {
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Output3 {
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub components: Option<Vec<Component9>>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component9 {
+    pub internal_type: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub components: Option<Vec<Component10>>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component10 {
     pub internal_type: String,
     pub name: String,
     #[serde(rename = "type")]
@@ -369,7 +736,383 @@ pub struct Devdoc {
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Methods {}
+pub struct Methods {
+    #[serde(rename = "cancel((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256)[])")]
+    pub cancel_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256: CancelAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256,
+    pub constructor: Constructor,
+    #[serde(rename = "fulfillAdvancedOrder(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes),(uint256,uint8,uint256,uint256,bytes32[])[],bytes32,address)")]
+    pub fulfill_advanced_order_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_bytes32_address: FulfillAdvancedOrderAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Bytes32Address,
+    #[serde(rename = "fulfillAvailableAdvancedOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes)[],(uint256,uint8,uint256,uint256,bytes32[])[],(uint256,uint256)[][],(uint256,uint256)[][],bytes32,address,uint256)")]
+    pub fulfill_available_advanced_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_uint256_uint256_uint256_uint256_bytes32_address_uint256: FulfillAvailableAdvancedOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Uint256Uint256Uint256Uint256Bytes32AddressUint256,
+    #[serde(rename = "fulfillAvailableOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[],(uint256,uint256)[][],(uint256,uint256)[][],bytes32,uint256)")]
+    pub fulfill_available_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_uint256_uint256_uint256_uint256_bytes32_uint256: FulfillAvailableOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesUint256Uint256Uint256Uint256Bytes32Uint256,
+    #[serde(rename = "fulfillBasicOrder((address,uint256,uint256,address,address,address,uint256,uint256,uint8,uint256,uint256,bytes32,uint256,bytes32,bytes32,uint256,(uint256,address)[],bytes))")]
+    pub fulfill_basic_order_address_uint256_uint256_address_address_address_uint256_uint256_uint8_uint256_uint256_bytes32_uint256_bytes32_bytes32_uint256_uint256_address_bytes: FulfillBasicOrderAddressUint256Uint256AddressAddressAddressUint256Uint256Uint8Uint256Uint256Bytes32Uint256Bytes32Bytes32Uint256Uint256AddressBytes,
+    #[serde(rename = "fulfillBasicOrder_efficient_6GL6yc((address,uint256,uint256,address,address,address,uint256,uint256,uint8,uint256,uint256,bytes32,uint256,bytes32,bytes32,uint256,(uint256,address)[],bytes))")]
+    pub fulfill_basic_order_efficient_6gl6yc_address_uint256_uint256_address_address_address_uint256_uint256_uint8_uint256_uint256_bytes32_uint256_bytes32_bytes32_uint256_uint256_address_bytes: FulfillBasicOrderEfficient6Gl6ycAddressUint256Uint256AddressAddressAddressUint256Uint256Uint8Uint256Uint256Bytes32Uint256Bytes32Bytes32Uint256Uint256AddressBytes,
+    #[serde(rename = "fulfillOrder(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes),bytes32)")]
+    pub fulfill_order_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_bytes32: FulfillOrderAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesBytes32,
+    #[serde(rename = "getContractOffererNonce(address)")]
+    pub get_contract_offerer_nonce_address: GetContractOffererNonceAddress,
+    #[serde(rename = "getCounter(address)")]
+    pub get_counter_address: GetCounterAddress,
+    #[serde(rename = "getOrderHash((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256))")]
+    pub get_order_hash_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256: GetOrderHashAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256,
+    #[serde(rename = "getOrderStatus(bytes32)")]
+    pub get_order_status_bytes32: GetOrderStatusBytes32,
+    #[serde(rename = "incrementCounter()")]
+    pub increment_counter: IncrementCounter,
+    #[serde(rename = "information()")]
+    pub information: Information,
+    #[serde(rename = "matchAdvancedOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes)[],(uint256,uint8,uint256,uint256,bytes32[])[],((uint256,uint256)[],(uint256,uint256)[])[],address)")]
+    pub match_advanced_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_uint256_uint256_uint256_uint256_address: MatchAdvancedOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Uint256Uint256Uint256Uint256Address,
+    #[serde(rename = "matchOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[],((uint256,uint256)[],(uint256,uint256)[])[])")]
+    pub match_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_uint256_uint256_uint256_uint256: MatchOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesUint256Uint256Uint256Uint256,
+    #[serde(rename = "name()")]
+    pub name: Name,
+    #[serde(rename = "validate(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[])")]
+    pub validate_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes: ValidateAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Bytes,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256
+{
+    pub params: Params,
+    pub returns: Returns,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params {
+    pub orders: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns {
+    pub cancelled: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Constructor {
+    pub params: Params2,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params2 {
+    pub conduit_controller: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillAdvancedOrderAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Bytes32Address
+{
+    #[serde(rename = "custom:param")]
+    pub custom_param: String,
+    pub params: Params3,
+    pub returns: Returns2,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params3 {
+    pub fulfiller_conduit_key: String,
+    pub recipient: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns2 {
+    pub fulfilled: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillAvailableAdvancedOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Uint256Uint256Uint256Uint256Bytes32AddressUint256
+{
+    #[serde(rename = "custom:param")]
+    pub custom_param: String,
+    pub params: Params4,
+    pub returns: Returns3,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params4 {
+    pub fulfiller_conduit_key: String,
+    pub maximum_fulfilled: String,
+    pub recipient: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns3 {
+    #[serde(rename = "_0")]
+    pub n0: String,
+    #[serde(rename = "_1")]
+    pub n1: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillAvailableOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesUint256Uint256Uint256Uint256Bytes32Uint256
+{
+    #[serde(rename = "custom:param")]
+    pub custom_param: String,
+    pub params: Params5,
+    pub returns: Returns4,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params5 {
+    pub fulfiller_conduit_key: String,
+    pub maximum_fulfilled: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns4 {
+    #[serde(rename = "_0")]
+    pub n0: String,
+    #[serde(rename = "_1")]
+    pub n1: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillBasicOrderAddressUint256Uint256AddressAddressAddressUint256Uint256Uint8Uint256Uint256Bytes32Uint256Bytes32Bytes32Uint256Uint256AddressBytes
+{
+    pub params: Params6,
+    pub returns: Returns5,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params6 {
+    pub parameters: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns5 {
+    pub fulfilled: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillBasicOrderEfficient6Gl6ycAddressUint256Uint256AddressAddressAddressUint256Uint256Uint8Uint256Uint256Bytes32Uint256Bytes32Bytes32Uint256Uint256AddressBytes
+{
+    pub params: Params7,
+    pub returns: Returns6,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params7 {
+    pub parameters: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns6 {
+    pub fulfilled: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillOrderAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesBytes32
+{
+    #[serde(rename = "custom:param")]
+    pub custom_param: String,
+    pub params: Params8,
+    pub returns: Returns7,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params8 {
+    pub fulfiller_conduit_key: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns7 {
+    pub fulfilled: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetContractOffererNonceAddress {
+    pub details: String,
+    pub params: Params9,
+    pub returns: Returns8,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params9 {
+    pub contract_offerer: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns8 {
+    pub nonce: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetCounterAddress {
+    pub params: Params10,
+    pub returns: Returns9,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params10 {
+    pub offerer: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns9 {
+    pub counter: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOrderHashAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256
+{
+    #[serde(rename = "custom:param")]
+    pub custom_param: String,
+    pub returns: Returns10,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns10 {
+    pub order_hash: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOrderStatusBytes32 {
+    pub params: Params11,
+    pub returns: Returns11,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params11 {
+    pub order_hash: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns11 {
+    pub is_cancelled: String,
+    pub is_validated: String,
+    pub total_filled: String,
+    pub total_size: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncrementCounter {
+    pub returns: Returns12,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns12 {
+    pub new_counter: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Information {
+    pub returns: Returns13,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns13 {
+    pub conduit_controller: String,
+    pub domain_separator: String,
+    pub version: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchAdvancedOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Uint256Uint256Uint256Uint256Address
+{
+    #[serde(rename = "custom:param")]
+    pub custom_param: String,
+    pub params: Params12,
+    pub returns: Returns14,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Params12 {
+    pub recipient: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns14 {
+    #[serde(rename = "_0")]
+    pub n0: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesUint256Uint256Uint256Uint256
+{
+    #[serde(rename = "custom:param")]
+    pub custom_param: String,
+    pub returns: Returns15,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns15 {
+    #[serde(rename = "_0")]
+    pub n0: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Name {
+    pub returns: Returns16,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns16 {
+    #[serde(rename = "_0")]
+    pub n0: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Bytes
+{
+    #[serde(rename = "custom:param")]
+    pub custom_param: String,
+    pub returns: Returns17,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Returns17 {
+    #[serde(rename = "_0")]
+    pub n0: String,
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -381,7 +1124,154 @@ pub struct Userdoc {
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Methods2 {}
+pub struct Methods2 {
+    #[serde(rename = "cancel((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256)[])")]
+    pub cancel_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256: CancelAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint2562,
+    pub constructor: Constructor2,
+    #[serde(rename = "fulfillAdvancedOrder(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes),(uint256,uint8,uint256,uint256,bytes32[])[],bytes32,address)")]
+    pub fulfill_advanced_order_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_bytes32_address: FulfillAdvancedOrderAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Bytes32Address2,
+    #[serde(rename = "fulfillAvailableAdvancedOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes)[],(uint256,uint8,uint256,uint256,bytes32[])[],(uint256,uint256)[][],(uint256,uint256)[][],bytes32,address,uint256)")]
+    pub fulfill_available_advanced_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_uint256_uint256_uint256_uint256_bytes32_address_uint256: FulfillAvailableAdvancedOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Uint256Uint256Uint256Uint256Bytes32AddressUint2562,
+    #[serde(rename = "fulfillAvailableOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[],(uint256,uint256)[][],(uint256,uint256)[][],bytes32,uint256)")]
+    pub fulfill_available_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_uint256_uint256_uint256_uint256_bytes32_uint256: FulfillAvailableOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesUint256Uint256Uint256Uint256Bytes32Uint2562,
+    #[serde(rename = "fulfillBasicOrder((address,uint256,uint256,address,address,address,uint256,uint256,uint8,uint256,uint256,bytes32,uint256,bytes32,bytes32,uint256,(uint256,address)[],bytes))")]
+    pub fulfill_basic_order_address_uint256_uint256_address_address_address_uint256_uint256_uint8_uint256_uint256_bytes32_uint256_bytes32_bytes32_uint256_uint256_address_bytes: FulfillBasicOrderAddressUint256Uint256AddressAddressAddressUint256Uint256Uint8Uint256Uint256Bytes32Uint256Bytes32Bytes32Uint256Uint256AddressBytes2,
+    #[serde(rename = "fulfillBasicOrder_efficient_6GL6yc((address,uint256,uint256,address,address,address,uint256,uint256,uint8,uint256,uint256,bytes32,uint256,bytes32,bytes32,uint256,(uint256,address)[],bytes))")]
+    pub fulfill_basic_order_efficient_6gl6yc_address_uint256_uint256_address_address_address_uint256_uint256_uint8_uint256_uint256_bytes32_uint256_bytes32_bytes32_uint256_uint256_address_bytes: FulfillBasicOrderEfficient6Gl6ycAddressUint256Uint256AddressAddressAddressUint256Uint256Uint8Uint256Uint256Bytes32Uint256Bytes32Bytes32Uint256Uint256AddressBytes2,
+    #[serde(rename = "fulfillOrder(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes),bytes32)")]
+    pub fulfill_order_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_bytes32: FulfillOrderAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesBytes322,
+    #[serde(rename = "getCounter(address)")]
+    pub get_counter_address: GetCounterAddress2,
+    #[serde(rename = "getOrderHash((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256))")]
+    pub get_order_hash_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256: GetOrderHashAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint2562,
+    #[serde(rename = "getOrderStatus(bytes32)")]
+    pub get_order_status_bytes32: GetOrderStatusBytes322,
+    #[serde(rename = "incrementCounter()")]
+    pub increment_counter: IncrementCounter2,
+    #[serde(rename = "information()")]
+    pub information: Information2,
+    #[serde(rename = "matchAdvancedOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),uint120,uint120,bytes,bytes)[],(uint256,uint8,uint256,uint256,bytes32[])[],((uint256,uint256)[],(uint256,uint256)[])[],address)")]
+    pub match_advanced_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_uint120_uint120_bytes_bytes_uint256_uint8_uint256_uint256_bytes32_uint256_uint256_uint256_uint256_address: MatchAdvancedOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Uint256Uint256Uint256Uint256Address2,
+    #[serde(rename = "matchOrders(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[],((uint256,uint256)[],(uint256,uint256)[])[])")]
+    pub match_orders_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes_uint256_uint256_uint256_uint256: MatchOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesUint256Uint256Uint256Uint2562,
+    #[serde(rename = "name()")]
+    pub name: Name2,
+    #[serde(rename = "validate(((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,uint256,uint256,bytes32,uint256,bytes32,uint256),bytes)[])")]
+    pub validate_address_address_uint8_address_uint256_uint256_uint256_uint8_address_uint256_uint256_uint256_address_uint8_uint256_uint256_bytes32_uint256_bytes32_uint256_bytes: ValidateAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Bytes2,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint2562
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Constructor2 {
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillAdvancedOrderAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Bytes32Address2
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillAvailableAdvancedOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Uint256Uint256Uint256Uint256Bytes32AddressUint2562
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillAvailableOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesUint256Uint256Uint256Uint256Bytes32Uint2562
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillBasicOrderAddressUint256Uint256AddressAddressAddressUint256Uint256Uint8Uint256Uint256Bytes32Uint256Bytes32Bytes32Uint256Uint256AddressBytes2
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillBasicOrderEfficient6Gl6ycAddressUint256Uint256AddressAddressAddressUint256Uint256Uint8Uint256Uint256Bytes32Uint256Bytes32Bytes32Uint256Uint256AddressBytes2
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FulfillOrderAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesBytes322
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetCounterAddress2 {
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOrderHashAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint2562
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOrderStatusBytes322 {
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncrementCounter2 {
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Information2 {
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchAdvancedOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Uint120Uint120BytesBytesUint256Uint8Uint256Uint256Bytes32Uint256Uint256Uint256Uint256Address2
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchOrdersAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256BytesUint256Uint256Uint256Uint2562
+{
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Name2 {
+    pub notice: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateAddressAddressUint8AddressUint256Uint256Uint256Uint8AddressUint256Uint256Uint256AddressUint8Uint256Uint256Bytes32Uint256Bytes32Uint256Bytes2
+{
+    pub notice: String,
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -389,8 +1279,10 @@ pub struct Settings {
     pub remappings: Vec<String>,
     pub optimizer: Optimizer,
     pub metadata: Metadata2,
-    pub compilation_target: CompilationTarget,
+    pub compilation_target: HashMap<String, String>,
     pub libraries: Libraries,
+    #[serde(rename = "viaIR")]
+    pub via_ir: bool,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -408,25 +1300,347 @@ pub struct Metadata2 {
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CompilationTarget {
-    #[serde(rename = "src/Counter.sol")]
-    pub src_counter_sol: String,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Libraries {}
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Sources {
-    #[serde(rename = "src/Counter.sol")]
-    pub src_counter_sol: SrcCounterSol,
+pub struct Source {
+    keccak256: String,
+    urls: Vec<String>,
+    license: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SrcCounterSol {
+pub struct ContractsSeaportSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsConduitLibConduitEnumsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsConduitLibConduitStructsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsHelpersPointerLibrariesSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesAmountDerivationErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesConduitControllerInterfaceSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesConduitInterfaceSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesConsiderationEventsAndErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesConsiderationInterfaceSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesCriteriaResolutionErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesFulfillmentApplicationErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesReentrancyErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesSignatureVerificationErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesTokenTransferrerErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsInterfacesZoneInteractionErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibAmountDeriverSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibAssertionsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibBasicOrderFulfillerSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationBaseSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationConstantsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationDecoderSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationEncoderSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationEnumsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationErrorConstantsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationErrorsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibConsiderationStructsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibCounterManagerSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibCriteriaResolutionSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibExecutorSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibFulfillmentApplierSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibGettersAndDeriversSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibLowLevelHelpersSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibOrderCombinerSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibOrderFulfillerSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibOrderValidatorSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibReentrancyGuardSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibSignatureVerificationSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibTokenTransferrerSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibTokenTransferrerConstantsSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibVerifiersSol {
+    pub keccak256: String,
+    pub urls: Vec<String>,
+    pub license: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractsLibZoneInteractionSol {
     pub keccak256: String,
     pub urls: Vec<String>,
     pub license: String,
@@ -447,8 +1661,10 @@ pub struct Ast {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedSymbols {
-    #[serde(rename = "Counter")]
-    pub counter: Vec<i64>,
+    #[serde(rename = "Consideration")]
+    pub consideration: Vec<i64>,
+    #[serde(rename = "Seaport")]
+    pub seaport: Vec<i64>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -459,22 +1675,29 @@ pub struct Node {
     pub src: String,
     pub nodes: Vec<Node2>,
     pub literals: Option<Vec<String>>,
+    pub absolute_path: Option<String>,
+    pub file: Option<String>,
+    pub name_location: Option<String>,
+    pub scope: Option<i64>,
+    pub source_unit: Option<i64>,
+    #[serde(default)]
+    pub symbol_aliases: Vec<SymbolAliase>,
+    pub unit_alias: Option<String>,
     #[serde(rename = "abstract")]
     pub abstract_field: Option<bool>,
     #[serde(default)]
-    pub base_contracts: Vec<Value>,
+    pub base_contracts: Vec<BaseContract>,
     pub canonical_name: Option<String>,
     #[serde(default)]
     pub contract_dependencies: Vec<Value>,
     pub contract_kind: Option<String>,
+    pub documentation: Option<Documentation2>,
     pub fully_implemented: Option<bool>,
     #[serde(default)]
     pub linearized_base_contracts: Vec<i64>,
     pub name: Option<String>,
-    pub name_location: Option<String>,
-    pub scope: Option<i64>,
     #[serde(default)]
-    pub used_errors: Vec<Value>,
+    pub used_errors: Vec<i64>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -484,51 +1707,23 @@ pub struct Node2 {
     pub node_type: String,
     pub src: String,
     pub nodes: Vec<Value>,
-    pub constant: Option<bool>,
-    pub function_selector: String,
-    pub mutability: Option<String>,
+    pub body: Body,
+    pub documentation: Documentation,
+    pub implemented: bool,
+    pub kind: String,
+    pub modifiers: Vec<Modifier>,
     pub name: String,
     pub name_location: String,
+    pub parameters: Parameters,
+    pub return_parameters: ReturnParameters,
     pub scope: i64,
-    pub state_variable: Option<bool>,
-    pub storage_location: Option<String>,
-    pub type_descriptions: Option<TypeDescriptions>,
-    pub type_name: Option<TypeName>,
-    pub visibility: String,
-    pub body: Option<Body>,
-    pub implemented: Option<bool>,
-    pub kind: Option<String>,
-    #[serde(default)]
-    pub modifiers: Vec<Value>,
-    pub parameters: Option<Parameters>,
-    pub return_parameters: Option<ReturnParameters>,
-    pub state_mutability: Option<String>,
+    pub state_mutability: String,
     #[serde(rename = "virtual")]
-    pub virtual_field: Option<bool>,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TypeDescriptions {
-    pub type_identifier: String,
-    pub type_string: String,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TypeName {
-    pub id: i64,
-    pub name: String,
-    pub node_type: String,
-    pub src: String,
-    pub type_descriptions: TypeDescriptions2,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TypeDescriptions2 {
-    pub type_identifier: String,
-    pub type_string: String,
+    pub virtual_field: bool,
+    pub visibility: String,
+    #[serde(default)]
+    pub base_functions: Vec<i64>,
+    pub overrides: Option<Overrides>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -544,8 +1739,30 @@ pub struct Body {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Statement {
-    pub expression: Expression,
+    #[serde(rename = "AST")]
+    pub ast: Option<Ast2>,
+    pub evm_version: Option<String>,
+    #[serde(default)]
+    pub external_references: Vec<Value>,
     pub id: i64,
+    pub node_type: String,
+    pub src: String,
+    pub expression: Option<Expression2>,
+    pub function_return_parameters: Option<i64>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ast2 {
+    pub node_type: String,
+    pub src: String,
+    pub statements: Vec<Statement2>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Statement2 {
+    pub expression: Expression,
     pub node_type: String,
     pub src: String,
 }
@@ -553,84 +1770,103 @@ pub struct Statement {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Expression {
+    pub arguments: Vec<Argument>,
+    pub function_name: FunctionName,
+    pub node_type: String,
+    pub src: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Argument {
+    pub kind: String,
+    pub node_type: String,
+    pub src: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub value: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionName {
+    pub name: String,
+    pub node_type: String,
+    pub src: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Expression2 {
+    pub hex_value: String,
     pub id: i64,
     pub is_constant: bool,
     #[serde(rename = "isLValue")]
     pub is_lvalue: bool,
     pub is_pure: bool,
+    pub kind: String,
     pub l_value_requested: bool,
     pub node_type: String,
-    pub operator: String,
-    pub prefix: Option<bool>,
     pub src: String,
-    pub sub_expression: Option<SubExpression>,
-    pub type_descriptions: TypeDescriptions4,
-    pub left_hand_side: Option<LeftHandSide>,
-    pub right_hand_side: Option<RightHandSide>,
+    pub type_descriptions: TypeDescriptions,
+    pub value: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SubExpression {
+pub struct TypeDescriptions {
+    pub type_identifier: String,
+    pub type_string: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Documentation {
+    pub id: i64,
+    pub node_type: String,
+    pub src: String,
+    pub text: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Modifier {
+    pub arguments: Vec<Argument2>,
+    pub id: i64,
+    pub kind: String,
+    pub modifier_name: ModifierName,
+    pub node_type: String,
+    pub src: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Argument2 {
     pub id: i64,
     pub name: String,
     pub node_type: String,
     pub overloaded_declarations: Vec<Value>,
     pub referenced_declaration: i64,
     pub src: String,
-    pub type_descriptions: TypeDescriptions3,
+    pub type_descriptions: TypeDescriptions2,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TypeDescriptions3 {
+pub struct TypeDescriptions2 {
     pub type_identifier: String,
     pub type_string: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TypeDescriptions4 {
-    pub type_identifier: String,
-    pub type_string: String,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LeftHandSide {
+pub struct ModifierName {
     pub id: i64,
     pub name: String,
+    pub name_locations: Vec<String>,
     pub node_type: String,
-    pub overloaded_declarations: Vec<Value>,
     pub referenced_declaration: i64,
     pub src: String,
-    pub type_descriptions: TypeDescriptions5,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TypeDescriptions5 {
-    pub type_identifier: String,
-    pub type_string: String,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RightHandSide {
-    pub id: i64,
-    pub name: String,
-    pub node_type: String,
-    pub overloaded_declarations: Vec<Value>,
-    pub referenced_declaration: i64,
-    pub src: String,
-    pub type_descriptions: TypeDescriptions6,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TypeDescriptions6 {
-    pub type_identifier: String,
-    pub type_string: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -655,14 +1891,66 @@ pub struct Parameter {
     pub src: String,
     pub state_variable: bool,
     pub storage_location: String,
-    pub type_descriptions: TypeDescriptions7,
+    pub type_descriptions: TypeDescriptions3,
+    pub type_name: TypeName,
+    pub visibility: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeDescriptions3 {
+    pub type_identifier: String,
+    pub type_string: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeName {
+    pub id: i64,
+    pub name: String,
+    pub node_type: String,
+    pub src: String,
+    pub state_mutability: String,
+    pub type_descriptions: TypeDescriptions4,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeDescriptions4 {
+    pub type_identifier: String,
+    pub type_string: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReturnParameters {
+    pub id: i64,
+    pub node_type: String,
+    pub parameters: Vec<Parameter2>,
+    pub src: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Parameter2 {
+    pub constant: bool,
+    pub id: i64,
+    pub mutability: String,
+    pub name: String,
+    pub name_location: String,
+    pub node_type: String,
+    pub scope: i64,
+    pub src: String,
+    pub state_variable: bool,
+    pub storage_location: String,
+    pub type_descriptions: TypeDescriptions5,
     pub type_name: TypeName2,
     pub visibility: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TypeDescriptions7 {
+pub struct TypeDescriptions5 {
     pub type_identifier: String,
     pub type_string: String,
 }
@@ -674,21 +1962,73 @@ pub struct TypeName2 {
     pub name: String,
     pub node_type: String,
     pub src: String,
-    pub type_descriptions: TypeDescriptions8,
+    pub type_descriptions: TypeDescriptions6,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TypeDescriptions8 {
+pub struct TypeDescriptions6 {
     pub type_identifier: String,
     pub type_string: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ReturnParameters {
+pub struct Overrides {
     pub id: i64,
     pub node_type: String,
-    pub parameters: Vec<Value>,
+    pub overrides: Vec<Value>,
     pub src: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolAliase {
+    pub foreign: Foreign,
+    pub name_location: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Foreign {
+    pub id: i64,
+    pub name: String,
+    pub node_type: String,
+    pub overloaded_declarations: Vec<Value>,
+    pub referenced_declaration: i64,
+    pub src: String,
+    pub type_descriptions: TypeDescriptions7,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeDescriptions7 {}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseContract {
+    pub base_name: BaseName,
+    pub id: i64,
+    pub node_type: String,
+    pub src: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseName {
+    pub id: i64,
+    pub name: String,
+    pub name_locations: Vec<String>,
+    pub node_type: String,
+    pub referenced_declaration: i64,
+    pub src: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Documentation2 {
+    pub id: i64,
+    pub node_type: String,
+    pub src: String,
+    pub text: String,
 }
