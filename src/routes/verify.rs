@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use ethers::types::{Address, BlockId, Bytes, Chain, TxHash};
+use ethers::types::{Address, Bytes, Chain, TxHash};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, error::Error, fs, path::PathBuf, process::Command, str::FromStr};
@@ -230,12 +230,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     });
 
     // Get the creation data.
-    let block = creation_data.responses.get(&Chain::Optimism).unwrap().as_ref().unwrap().block;
-    let block_num = match block {
-        BlockId::Number(num) => num.as_number().unwrap(),
-        BlockId::Hash(_) => todo!(),
-    };
-
+    let block_num = creation_data.responses.get(&Chain::Optimism).unwrap().as_ref().unwrap().block;
     let selected_creation_data =
         creation_data.responses.get(&Chain::Optimism).unwrap().as_ref().unwrap();
 
@@ -248,7 +243,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
         chain: Chain::Optimism, // TODO Un-hardcode this
         sources,
         creation_tx_hash: selected_creation_data.tx_hash,
-        creation_block_number: block_num.as_u64(),
+        creation_block_number: block_num.as_number().unwrap().as_u64(),
         creation_code: selected_creation_data.creation_code.clone(),
         runtime_code: contract_runtime_code(
             provider.providers.get(&Chain::Optimism).unwrap(),

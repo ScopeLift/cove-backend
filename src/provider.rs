@@ -1,14 +1,14 @@
 use colored::Colorize;
 use ethers::{
     providers::{Http, Middleware, Provider},
-    types::{Address, BlockId, Bytes, Chain, TxHash, U256},
+    types::{Address, BlockId, BlockNumber, Bytes, Chain, TxHash, U256},
 };
 use futures::future;
 use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
 
 pub struct ContractCreation {
     pub tx_hash: TxHash,
-    pub block: BlockId,
+    pub block: BlockNumber,
     pub creation_code: Bytes,
 }
 
@@ -186,7 +186,7 @@ impl MultiChainProvider {
 async fn find_creation_block(
     provider: &Arc<Provider<Http>>,
     address: Address,
-) -> Result<BlockId, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<BlockNumber, Box<dyn std::error::Error + Send + Sync>> {
     let chain_id = provider.get_chainid().await?;
     let chain_name = Chain::try_from(chain_id)?;
     print_color_by_chain(
@@ -243,13 +243,13 @@ async fn find_creation_block(
         format!("  {:?}: Found deployment block {:?}.", chain_name, high),
         chain_name,
     );
-    Ok(BlockId::from(high))
+    Ok(BlockNumber::from(high))
 }
 
 async fn find_creation_tx(
     provider: &Arc<Provider<Http>>,
     address: Address,
-    block: BlockId,
+    block: BlockNumber,
 ) -> Result<ContractCreation, Box<dyn std::error::Error + Send + Sync>> {
     let chain_id = provider.get_chainid().await?;
     let chain_name = Chain::try_from(chain_id)?;
