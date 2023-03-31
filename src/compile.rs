@@ -6,7 +6,7 @@ use std::{
     process::Command,
 };
 use toml;
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 // TODO We currently only support forge projects and assume the user is using the default forge
 // directory structure of `src/`, `lib/`, and `out/`.
@@ -40,15 +40,28 @@ pub fn build_commands<P: AsRef<Path>>(path: &P) -> Result<Vec<Command>, Box<dyn 
     Ok(commands)
 }
 
-pub fn get_artifacts<P: AsRef<Path>>(out_dir: P) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+pub fn get_artifacts<P: AsRef<Path>>(repo_dir: P) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut artifacts = Vec::new();
 
-    for entry in WalkDir::new(out_dir) {
+    fn is_out_dir(entry: &DirEntry) -> bool {
+        entry.file_type().is_dir()
+            && entry.file_name().to_string_lossy().to_lowercase().contains("out")
+    }
+
+    let out_dirs =
+        WalkDir::new(&repo_dir).min_depth(1).max_depth(1).into_iter().filter_entry(is_out_dir);
+
+    for entry in out_dirs {
         let entry = entry?;
-        if entry.file_type().is_file()
-            && entry.path().extension().map_or(false, |ext| ext == "json")
-        {
-            artifacts.push(entry.path().to_path_buf());
+        if entry.path().is_dir() {
+            for inner_entry in WalkDir::new(entry.path()) {
+                let inner_entry = inner_entry?;
+                if inner_entry.file_type().is_file()
+                    && inner_entry.path().extension().map_or(false, |ext| ext == "json")
+                {
+                    artifacts.push(inner_entry.into_path());
+                }
+            }
         }
     }
 

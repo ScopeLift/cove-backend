@@ -11,14 +11,7 @@ use axum::{
 use ethers::types::{Address, BlockId, Bytes, Chain, TxHash};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    str::FromStr,
-};
+use std::{collections::HashMap, error::Error, fs, path::PathBuf, process::Command, str::FromStr};
 use tempfile::TempDir;
 
 #[derive(Deserialize)]
@@ -122,12 +115,12 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     let temp_dir = TempDir::new().unwrap();
     let path = &temp_dir.path();
 
-    // Clone the repository and checking out the commit.
+    // Clone the repository and check out the commit.
     println!("\nCLONING REPOSITORY");
     let maybe_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
     if maybe_repo.is_err() {
         println!("  Unable to clone repository, returning error.");
-        return (StatusCode::BAD_REQUEST, format!("Unable to clone repository {repo_url}"))
+        return (StatusCode::BAD_REQUEST, format!("Unable to clone {repo_url}. Make sure the repository is public and the commit hash is correct."))
             .into_response()
     }
 
@@ -148,8 +141,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
         }
         println!("    Build succeeded, comparing creation code.");
 
-        // TODO Get our directory from config file or check all `*out*` dirs.
-        let artifacts = compile::get_artifacts(Path::join(path, "optimized-out")).unwrap(); //
+        let artifacts = compile::get_artifacts(path).unwrap();
         let matches = provider.compare_creation_code(artifacts, &creation_data);
 
         if matches.is_all_none() {
