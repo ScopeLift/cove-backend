@@ -1,3 +1,4 @@
+use colored::Colorize;
 use ethers::{
     providers::{Http, Middleware, Provider},
     types::{Address, BlockId, Bytes, Chain, TxHash, U256},
@@ -9,6 +10,16 @@ pub struct ContractCreation {
     pub tx_hash: TxHash,
     pub block: BlockId,
     pub creation_code: Bytes,
+}
+
+fn print_color_by_chain(text: String, chain: Chain) {
+    match chain {
+        Chain::Goerli => println!("{}", text.yellow()),
+        Chain::Mainnet => println!("{}", text.blue()),
+        Chain::Optimism => println!("{}", text.red()),
+        Chain::Polygon => println!("{}", text.purple()),
+        _ => println!("{}", text),
+    }
 }
 
 // ==============================
@@ -178,12 +189,15 @@ async fn find_creation_block(
 ) -> Result<BlockId, Box<dyn std::error::Error + Send + Sync>> {
     let chain_id = provider.get_chainid().await?;
     let chain_name = Chain::try_from(chain_id)?;
-    println!("  {:?}: Checking if there is code at this address.", chain_name);
+    print_color_by_chain(
+        format!("  {:?}: Checking if there is code at this address.", chain_name),
+        chain_name,
+    );
     let latest_block_num = provider.get_block_number().await?.as_u64();
     let latest_block = BlockId::from(latest_block_num);
     let has_code = !provider.get_code(address, Some(latest_block)).await?.is_empty();
     if !has_code {
-        println!("  {:?}: No code, returning.", chain_name);
+        print_color_by_chain(format!("  {:?}: No code, returning.", chain_name), chain_name);
         return Err("Contract does not exist".into())
     }
 
@@ -194,7 +208,10 @@ async fn find_creation_block(
     // for block 13600864`.
 
     // TODO Temporary for faster demo, we hardcode the highs and lows.
-    println!("  {:?}: Binary searching over all blocks to find deployment block.", chain_name);
+    print_color_by_chain(
+        format!("  {:?}: Binary searching over all blocks to find deployment block.", chain_name),
+        chain_name,
+    );
     let mut low = match chain_id.as_u64() {
         1 => 16655960 - 1,
         5 => 8515378 - 1,
@@ -222,7 +239,10 @@ async fn find_creation_block(
             low = mid + 1;
         }
     }
-    println!("  {:?}: Found deployment block {:?}.", chain_name, high);
+    print_color_by_chain(
+        format!("  {:?}: Found deployment block {:?}.", chain_name, high),
+        chain_name,
+    );
     Ok(BlockId::from(high))
 }
 
@@ -233,7 +253,10 @@ async fn find_creation_tx(
 ) -> Result<ContractCreation, Box<dyn std::error::Error + Send + Sync>> {
     let chain_id = provider.get_chainid().await?;
     let chain_name = Chain::try_from(chain_id)?;
-    println!("  {:?}: Finding deployment transaction and creation code.", chain_name);
+    print_color_by_chain(
+        format!("  {:?}: Finding deployment transaction and creation code.", chain_name),
+        chain_name,
+    );
     let block_data = provider.get_block(block).await?.ok_or("Block not found")?;
 
     for tx_hash in block_data.transactions {
@@ -247,7 +270,10 @@ async fn find_creation_tx(
             if let Some(contract_address) = receipt.contract_address {
                 if contract_address == address {
                     let creation_code = tx.input;
-                    println!("  {:?}: Found transaction hash {:?}.", chain_name, tx_hash);
+                    print_color_by_chain(
+                        format!("  {:?}: Found transaction hash {:?}.", chain_name, tx_hash),
+                        chain_name,
+                    );
                     return Ok(ContractCreation { tx_hash, block, creation_code })
                 }
             }
@@ -276,7 +302,10 @@ async fn find_creation_tx(
                 let creation_code = &tx.input[100..len];
                 let creation_code = Bytes::from_iter(creation_code);
 
-                println!("  {:?}: Found transaction hash {:?}.", chain_name, tx_hash);
+                print_color_by_chain(
+                    format!("  {:?}: Found transaction hash {:?}.", chain_name, tx_hash),
+                    chain_name,
+                );
                 return Ok(ContractCreation { tx_hash, block, creation_code })
             }
         }
