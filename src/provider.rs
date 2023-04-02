@@ -329,10 +329,11 @@ mod tests {
         let provider = get_provider();
 
         // Define contract addresses with their corresponding creation blocks.
+        #[rustfmt::skip]
         let test_cases = vec![
-            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", BlockId::from(8666991), "Counter"),
-            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", BlockId::from(4734394), "UniV3Factory"),
-            ("0x00000000000001ad428e4906aE43D8F9852d0dD6", BlockId::from(8515378), "Seaport"),
+            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", BlockNumber::from(8666991), "Counter"),
+            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", BlockNumber::from(4734394), "UniV3Factory"),
+            ("0x00000000000001ad428e4906aE43D8F9852d0dD6", BlockNumber::from(8515378), "Seaport"),
         ];
 
         let tasks = test_cases.into_iter().map(|(contract, expected_block, name)| {
