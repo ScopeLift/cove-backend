@@ -27,7 +27,7 @@ async fn verify_test() {
     println!("status   {:?}", response.status());
     // println!("response {:?}", response.text().await);
 
-    // assert_eq!(200, response.status().as_u16());
+    assert_eq!(200, response.status().as_u16());
 
     // let saved = ...
     // assert_eq!();

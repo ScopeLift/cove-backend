@@ -204,31 +204,12 @@ async fn find_creation_block(
     // Binary search to find the block where the contract was created.
     // TODO Consider biasing this towards recent blocks to reduce RPC requests. Currently the max
     // number of RPC requests used is log2(num_blocks). For 17M mainnet blocks this is 24 RPC calls.
-    // TODO manually override low block for gnosis chain because it errors with `No state available
-    // for block 13600864`.
-
-    // TODO Temporary for faster demo, we hardcode the highs and lows.
     print_color_by_chain(
         format!("  {:?}: Binary searching over all blocks to find deployment block.", chain_name),
         chain_name,
     );
-    let mut low = match chain_id.as_u64() {
-        1 => 16655960 - 1,
-        5 => 8515378 - 1,
-        10 => 75209359 - 1,
-        137 => 39444370 - 1,
-        _ => 0,
-    };
-    let mut high = match chain_id.as_u64() {
-        1 => 16655960 + 1,
-        5 => 8515378 + 1,
-        10 => 75209359 + 1,
-        137 => 39444370 + 1,
-        _ => 0,
-    };
-
-    // let mut low = 0;
-    // let mut high = latest_block_num;
+    let mut low = 0;
+    let mut high = latest_block_num;
     while low < high {
         let mid = (low + high) / 2;
         let block = BlockId::from(mid);
@@ -239,6 +220,7 @@ async fn find_creation_block(
             low = mid + 1;
         }
     }
+
     print_color_by_chain(
         format!("  {:?}: Found deployment block {:?}.", chain_name, high),
         chain_name,
