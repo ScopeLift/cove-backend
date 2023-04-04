@@ -4,7 +4,7 @@ use ethers::{
     types::{Address, BlockId, BlockNumber, Bytes, Chain, TxHash, U256},
 };
 use futures::future;
-use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, env, error::Error, fs, path::PathBuf, str::FromStr, sync::Arc};
 
 pub struct ContractCreation {
     pub tx_hash: TxHash,
@@ -107,7 +107,10 @@ impl MultiChainProvider {
         Self { providers }
     }
 
-    pub async fn get_creation_code(&self, address: Address) -> ChainResponse<ContractCreation> {
+    pub async fn get_creation_code(
+        &self,
+        address: Address,
+    ) -> Result<ChainResponse<ContractCreation>, Box<dyn Error>> {
         async fn find_creation_code(
             provider: &Arc<Provider<Http>>,
             address: Address,
@@ -121,7 +124,12 @@ impl MultiChainProvider {
             (*chain, find_creation_code(provider, address).await)
         });
         let responses = future::join_all(futures).await.into_iter().collect::<HashMap<_, _>>();
-        ChainResponse { responses }
+
+        let response = ChainResponse { responses };
+        if response.is_all_none() {
+            return Err(format!("No creation code for {:?} found on any chain", address).into())
+        }
+        Ok(response)
     }
 
     pub fn compare_creation_code(

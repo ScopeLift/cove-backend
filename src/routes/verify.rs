@@ -17,7 +17,15 @@ use ethers::{
     types::{Address, Bytes, Chain, TxHash},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, error::Error, fs, path::PathBuf, process::Command, str::FromStr};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    result::Result,
+    str::FromStr,
+};
 use tempfile::TempDir;
 
 #[derive(Deserialize)]
@@ -59,6 +67,21 @@ struct SourceFile {
     content: String,
 }
 
+pub enum VerifyError {
+    BadRequest(String),
+    InternalServerError(String),
+}
+
+impl IntoResponse for VerifyError {
+    fn into_response(self) -> Response {
+        let (status, error_message) = match self {
+            VerifyError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            VerifyError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+        (status, error_message).into_response()
+    }
+}
+
 // ===================================
 // ======== Main verification ========
 // ===================================
@@ -72,10 +95,12 @@ struct SourceFile {
 //         contract_address = %json.contract_address,
 //     )
 // )]
-pub async fn verify(Json(json): Json<VerifyData>) -> Response {
+pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyError> {
     let repo_url = json.repo_url.as_str();
     let commit_hash = json.repo_commit.as_str();
-    let contract_addr = Address::from_str(json.contract_address.as_str()).unwrap();
+    let contract_addr = Address::from_str(json.contract_address.as_str())
+        .map_err(|e| VerifyError::BadRequest(format!("Invalid contract address: {}", e)))?;
+
     println!("\nVERIFICATION INPUTS:");
     println!("  Repo URL:         {}", repo_url);
     println!("  Commit Hash:      {}", commit_hash);
@@ -83,56 +108,54 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
 
     println!("\nFETCHING CREATION CODE");
     let provider = MultiChainProvider::default();
-    let creation_data = provider.get_creation_code(contract_addr).await;
-
-    // Return an error if there's no creation code for the transaction hash.
-    if creation_data.is_all_none() {
-        println!("  Creation code not found, returning error.");
-        let msg = format!("No creation code for {:?} found on any supported chain", contract_addr);
-        return (StatusCode::BAD_REQUEST, msg).into_response()
-    }
+    let creation_data = provider
+        .get_creation_code(contract_addr)
+        .await
+        .map_err(|e| VerifyError::BadRequest(format!("Could not fetch creation code: {}", e)))?;
     println!("  Found creation code on the following chains: {:?}", creation_data.responses.keys());
 
     // Create a temporary directory for the cloned repository.
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new().map_err(|e| {
+        VerifyError::InternalServerError(format!("Could not create directory to clone repo: {}", e))
+    })?;
     let project_path = &temp_dir.path();
 
     // Clone the repository and check out the commit.
     println!("\nCLONING REPOSITORY");
-    let maybe_repo = clone_repo_and_checkout_commit(repo_url, commit_hash, &temp_dir).await;
-    if maybe_repo.is_err() {
-        println!("  Unable to clone repository, returning error.");
-        return (StatusCode::BAD_REQUEST, format!("Unable to clone {repo_url}. Make sure the repository is public and the commit hash is correct."))
-            .into_response()
-    }
+    clone_repo_and_checkout_commit(repo_url, commit_hash, project_path)
+        .await
+        .map_err(|e| VerifyError::BadRequest(format!("Could not clone repo: {}", e)))?;
 
     // Determine the framework used by the project. For now we only support Foundry.
-    let maybe_project = Foundry::new(project_path);
-    if maybe_project.is_err() {
-        println!("  Framework not supported, returning error.");
-        let msg = maybe_project.err().unwrap().to_string();
-        return (StatusCode::BAD_REQUEST, msg).into_response()
-    }
-    let project = Foundry::new(project_path).unwrap();
+    let project = Foundry::new(project_path)
+        .map_err(|e| VerifyError::BadRequest(format!("Only supports forge projects: {}", e)))?;
 
     // Get the build commands for the project.
     println!("\nBUILDING CONTRACTS AND COMPARING BYTECODE");
-    let build_commands = project.build_commands().unwrap();
+    let build_commands = project.build_commands().map_err(|e| {
+        VerifyError::InternalServerError(format!("Could not find build commands: {}", e))
+    })?;
     let mut verified_contracts: HashMap<Chain, PathBuf> = HashMap::new();
 
     for mut build_command in build_commands {
         println!("  Building with command: {}", format!("{:?}", build_command).replace('"', ""));
 
         // Build the contracts.
-        std::env::set_current_dir(project_path).unwrap();
-        let build_result = build_command.output().unwrap();
+        std::env::set_current_dir(project_path).map_err(|e| {
+            VerifyError::InternalServerError(format!("Could not set current directory: {}", e))
+        })?;
+        let build_result = build_command.output().map_err(|e| {
+            VerifyError::InternalServerError(format!("Failed to execute command: {}", e))
+        })?;
         if !build_result.status.success() {
             println!("    Build failed, continuing to next build command.");
             continue // This profile might not compile, e.g. perhaps it fails with stack too deep.
         }
         println!("    Build succeeded, comparing creation code.");
 
-        let artifacts = project.get_artifacts().unwrap();
+        let artifacts = project.get_artifacts().map_err(|e| {
+            VerifyError::InternalServerError(format!("Could not find artifacts: {}", e))
+        })?;
         let matches = provider.compare_creation_code(artifacts, &creation_data);
 
         if matches.is_all_none() {
@@ -144,14 +167,18 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
         // change bytecode. This is likely true for other compilers too.
         for (chain, path) in matches.iter_entries() {
             // Extract contract name from path by removing the extension
-            let stem = path.file_stem().unwrap();
+            let stem = path.file_stem().ok_or("Bad file name").map_err(|e| {
+                VerifyError::InternalServerError(format!("Could not split file name: {}", e))
+            })?;
             println!("    ✅ Found matching contract on chain {:?}: {:?}", chain, stem);
             verified_contracts.insert(*chain, path.clone());
         }
     }
 
     if verified_contracts.is_empty() {
-        return (StatusCode::BAD_REQUEST, "No matching contracts found".to_string()).into_response()
+        return Ok(
+            (StatusCode::BAD_REQUEST, "No matching contracts found".to_string()).into_response()
+        )
     }
 
     // If multiple matches found, tell user we are choosing one.
@@ -167,8 +194,12 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
 
     // Get the artifact for the contract.
     let artifact_path = verified_contracts.get(&Chain::Optimism).unwrap();
-    let artifact_content = fs::read_to_string(artifact_path).unwrap();
-    let artifact: ConfigurableContractArtifact = serde_json::from_str(&artifact_content).unwrap();
+    let artifact_content = fs::read_to_string(artifact_path)
+        .map_err(|e| VerifyError::InternalServerError(format!("Could not read artifact: {}", e)))?;
+    let artifact: ConfigurableContractArtifact =
+        serde_json::from_str(&artifact_content).map_err(|e| {
+            VerifyError::InternalServerError(format!("Could not parse artifact: {}", e))
+        })?;
 
     // Extract the compiler data.
     let metadata = artifact.metadata.unwrap();
@@ -182,6 +213,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     // First we get the path of the most-derived contract, i.e. the one that was verified that we
     // want first in the vector.
     let first_contract_path = metadata.settings.compilation_target.keys().next().unwrap();
+
     // Since the key names will always differ, we read them into a hash map.
     let source_file_names: Vec<String> = metadata.sources.inner.keys().cloned().collect();
 
@@ -192,15 +224,23 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
         .unwrap()
         .filter_map(Result::ok)
         .find(|entry| entry.path().extension().unwrap_or_default() == "json")
-        .ok_or(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "JSON file not found in build_info directory",
-        ))
-        .unwrap();
-    let build_info_content = fs::read_to_string(build_info_file.path()).unwrap();
+        .ok_or("Bad file name")
+        .map_err(|e| {
+            VerifyError::InternalServerError(format!(
+                "JSON file not found in build_info directory: {}",
+                e
+            ))
+        })?;
+
+    let build_info_content = fs::read_to_string(build_info_file.path()).map_err(|e| {
+        VerifyError::InternalServerError(format!("Could not read build info file: {}", e))
+    })?;
 
     // Now we merge the data into our sources vector.
-    let build_info: BuildInfo = serde_json::from_str(&build_info_content).unwrap();
+    let build_info: BuildInfo = serde_json::from_str(&build_info_content).map_err(|e| {
+        VerifyError::InternalServerError(format!("Could not parse build info file: {}", e))
+    })?;
+
     let mut sources: Vec<SourceFile> = source_file_names
         .iter()
         .filter_map(|path| {
@@ -255,28 +295,24 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Response {
     println!("\nFINISHED");
     println!("  200 response returned.");
 
-    (StatusCode::OK, Json(response)).into_response()
+    Ok((StatusCode::OK, Json(response)).into_response())
 }
 
 async fn clone_repo_and_checkout_commit(
     repo_url: &str,
     commit_hash: &str,
-    temp_dir: &TempDir,
+    temp_dir: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("  Cloning repository into a temporary directory.");
-    let status = Command::new("git")
-        .arg("clone")
-        .arg(repo_url)
-        .arg(temp_dir.path())
-        .arg("--quiet")
-        .status()?;
+    let status =
+        Command::new("git").arg("clone").arg(repo_url).arg(temp_dir).arg("--quiet").status()?;
 
     if !status.success() {
         return Err(format!("Failed to clone the repository. Exit status: {}", status).into())
     }
 
     let cwd = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
+    std::env::set_current_dir(temp_dir)?;
 
     println!("  Checking out the given commit.");
     let status = Command::new("git").arg("checkout").arg(commit_hash).arg("--quiet").status()?;
