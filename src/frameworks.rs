@@ -21,6 +21,50 @@ pub struct Foundry {
     path: PathBuf,
 }
 
+impl Foundry {
+    fn filter_artifacts(artifacts: Vec<PathBuf>) -> Vec<PathBuf> {
+        // Filter out artifacts where all sources are in the `lib/` directory.
+        artifacts
+            .into_iter()
+            .filter(|a| {
+                let content = fs::read_to_string(a).unwrap();
+                let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+                if let Some(metadata) = json.get("metadata") {
+                    if let Some(sources) = metadata.get("sources") {
+                        let sources_obj = sources.as_object().unwrap();
+                        let all_sources_are_libs =
+                            sources_obj.keys().all(|key| key.starts_with("lib/"));
+                        return !all_sources_are_libs
+                    }
+                }
+                false // If metadata and sources are missing, this can't be the right contract.
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn foundry_profiles(config_file: &PathBuf) -> Result<Vec<String>, Box<dyn Error>> {
+        let contents = fs::read_to_string(config_file).unwrap();
+        let data = contents.parse::<toml::Value>();
+        if data.is_err() {
+            return Err("Unable to parse foundry.toml file".into())
+        }
+
+        let mut profiles = Vec::new();
+        if let Some(profiles_table) =
+            data.unwrap().as_table().unwrap().get("profile").and_then(|v| v.as_table())
+        {
+            for key in profiles_table.keys() {
+                profiles.push(key.to_string());
+            }
+        }
+
+        if !profiles.contains(&"default".to_string()) {
+            profiles.push("default".to_string());
+        }
+        Ok(profiles)
+    }
+}
+
 impl Framework for Foundry {
     // Return an instance of the framework if the path is a supported project.
     fn new(path: &Path) -> Result<Self, Box<dyn Error + Send + Sync>> {
@@ -40,7 +84,7 @@ impl Framework for Foundry {
     // directory structure of `src/`, `lib/`, and `out/`.
     fn build_commands(&self) -> Result<Vec<Command>, Box<dyn Error>> {
         let config_file = self.path.join("foundry.toml");
-        let profile_names = foundry_profiles(&config_file)?;
+        let profile_names = Self::foundry_profiles(&config_file)?;
         println!("  Found profiles: {:?}", profile_names);
         let profile_names = vec!["optimized".to_string()]; // TODO temporary seaport hack
         let commands = profile_names
@@ -88,48 +132,6 @@ impl Framework for Foundry {
             }
         }
 
-        Ok(filter_artifacts(artifacts))
+        Ok(Self::filter_artifacts(artifacts))
     }
-}
-
-fn filter_artifacts(artifacts: Vec<PathBuf>) -> Vec<PathBuf> {
-    // Filter out artifacts where all sources are in the `lib/` directory.
-    artifacts
-        .into_iter()
-        .filter(|a| {
-            let content = fs::read_to_string(a).unwrap();
-            let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-            if let Some(metadata) = json.get("metadata") {
-                if let Some(sources) = metadata.get("sources") {
-                    let sources_obj = sources.as_object().unwrap();
-                    let all_sources_are_libs =
-                        sources_obj.keys().all(|key| key.starts_with("lib/"));
-                    return !all_sources_are_libs
-                }
-            }
-            false // If metadata and sources are missing, this can't be the right contract.
-        })
-        .collect::<Vec<_>>()
-}
-
-fn foundry_profiles(config_file: &PathBuf) -> Result<Vec<String>, Box<dyn Error>> {
-    let contents = fs::read_to_string(config_file).unwrap();
-    let data = contents.parse::<toml::Value>();
-    if data.is_err() {
-        return Err("Unable to parse foundry.toml file".into())
-    }
-
-    let mut profiles = Vec::new();
-    if let Some(profiles_table) =
-        data.unwrap().as_table().unwrap().get("profile").and_then(|v| v.as_table())
-    {
-        for key in profiles_table.keys() {
-            profiles.push(key.to_string());
-        }
-    }
-
-    if !profiles.contains(&"default".to_string()) {
-        profiles.push("default".to_string());
-    }
-    Ok(profiles)
 }
