@@ -8,8 +8,6 @@ use std::{
 };
 use walkdir::{DirEntry, WalkDir};
 
-pub struct Artifact;
-
 pub trait Framework {
     fn new(path: &Path) -> Result<Self, Box<dyn Error + Send + Sync>>
     where
