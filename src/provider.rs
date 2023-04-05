@@ -4,7 +4,7 @@ use ethers::{
     types::{Address, BlockId, BlockNumber, Bytes, Chain, TxHash, U256},
 };
 use futures::future;
-use std::{collections::HashMap, env, fs, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, env, error::Error, fs, path::PathBuf, str::FromStr, sync::Arc};
 
 pub struct ContractCreation {
     pub tx_hash: TxHash,
@@ -107,7 +107,10 @@ impl MultiChainProvider {
         Self { providers }
     }
 
-    pub async fn get_creation_code(&self, address: Address) -> ChainResponse<ContractCreation> {
+    pub async fn get_creation_code(
+        &self,
+        address: Address,
+    ) -> Result<ChainResponse<ContractCreation>, Box<dyn Error>> {
         async fn find_creation_code(
             provider: &Arc<Provider<Http>>,
             address: Address,
@@ -121,7 +124,12 @@ impl MultiChainProvider {
             (*chain, find_creation_code(provider, address).await)
         });
         let responses = future::join_all(futures).await.into_iter().collect::<HashMap<_, _>>();
-        ChainResponse { responses }
+
+        let response = ChainResponse { responses };
+        if response.is_all_none() {
+            return Err(format!("No creation code for {:?} found on any chain", address).into())
+        }
+        Ok(response)
     }
 
     pub fn compare_creation_code(
@@ -204,31 +212,12 @@ async fn find_creation_block(
     // Binary search to find the block where the contract was created.
     // TODO Consider biasing this towards recent blocks to reduce RPC requests. Currently the max
     // number of RPC requests used is log2(num_blocks). For 17M mainnet blocks this is 24 RPC calls.
-    // TODO manually override low block for gnosis chain because it errors with `No state available
-    // for block 13600864`.
-
-    // TODO Temporary for faster demo, we hardcode the highs and lows.
     print_color_by_chain(
         format!("  {:?}: Binary searching over all blocks to find deployment block.", chain_name),
         chain_name,
     );
-    let mut low = match chain_id.as_u64() {
-        1 => 16655960 - 1,
-        5 => 8515378 - 1,
-        10 => 75209359 - 1,
-        137 => 39444370 - 1,
-        _ => 0,
-    };
-    let mut high = match chain_id.as_u64() {
-        1 => 16655960 + 1,
-        5 => 8515378 + 1,
-        10 => 75209359 + 1,
-        137 => 39444370 + 1,
-        _ => 0,
-    };
-
-    // let mut low = 0;
-    // let mut high = latest_block_num;
+    let mut low = 0;
+    let mut high = latest_block_num;
     while low < high {
         let mid = (low + high) / 2;
         let block = BlockId::from(mid);
@@ -239,6 +228,7 @@ async fn find_creation_block(
             low = mid + 1;
         }
     }
+
     print_color_by_chain(
         format!("  {:?}: Found deployment block {:?}.", chain_name, high),
         chain_name,
@@ -329,10 +319,11 @@ mod tests {
         let provider = get_provider();
 
         // Define contract addresses with their corresponding creation blocks.
+        #[rustfmt::skip]
         let test_cases = vec![
-            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", BlockId::from(8666991), "Counter"),
-            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", BlockId::from(4734394), "UniV3Factory"),
-            ("0x00000000000001ad428e4906aE43D8F9852d0dD6", BlockId::from(8515378), "Seaport"),
+            ("0xc9E7278C9f386f307524eBbAaafcfEb649Be39b4", BlockNumber::from(8666991), "Counter"),
+            ("0x1F98431c8aD98523631AE4a59f267346ea31F984", BlockNumber::from(4734394), "UniV3Factory"),
+            ("0x00000000000001ad428e4906aE43D8F9852d0dD6", BlockNumber::from(8515378), "Seaport"),
         ];
 
         let tasks = test_cases.into_iter().map(|(contract, expected_block, name)| {
