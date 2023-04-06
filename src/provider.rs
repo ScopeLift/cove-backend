@@ -1,3 +1,4 @@
+use crate::bytecode::{ExpectedCreationBytecode, FoundCreationBytecode};
 use colored::Colorize;
 use ethers::{
     providers::{Http, Middleware, Provider},
@@ -139,32 +140,17 @@ impl MultiChainProvider {
     ) -> ChainResponse<PathBuf> {
         fn compare(
             artifacts: Vec<PathBuf>,
-            expected_creation_data: &ContractCreation,
+            expected_creation_code: &ExpectedCreationBytecode,
         ) -> Option<PathBuf> {
             for artifact in artifacts {
                 let content = fs::read_to_string(&artifact).unwrap();
                 let json: serde_json::Value = serde_json::from_str(&content).unwrap();
                 if let Some(bytecode_value) = json.get("bytecode").unwrap().get("object") {
                     if let Some(bytecode_str) = bytecode_value.as_str() {
-                        let bytecode = Bytes::from_str(bytecode_str).unwrap();
+                        let found_creation_code =
+                            FoundCreationBytecode::new(Bytes::from_str(bytecode_str).unwrap());
 
-                        // First just try a simple equality check.
-                        if bytecode == expected_creation_data.creation_code {
-                            return Some(artifact)
-                        }
-
-                        // Let's try accounting for constructor arguments now. We do this by
-                        // defining equality as:
-                        //   - The expected creation code is longer than the artifact creation code.
-                        //   - The expected creation code and found creation code match up to byte
-                        //     `n`, where `n` is the length of the found bytecode.
-                        let equal_len = expected_creation_data.creation_code.len() > bytecode.len();
-                        let bytes_match = bytecode
-                            .iter()
-                            .zip(expected_creation_data.creation_code.iter())
-                            .all(|(a_byte, b_byte)| a_byte == b_byte);
-
-                        if equal_len && bytes_match {
+                        if expected_creation_code.is_equal_to(&found_creation_code) {
                             return Some(artifact)
                         }
                     }
@@ -182,8 +168,10 @@ impl MultiChainProvider {
                 if expected_creation_data.is_none() {
                     return (*chain, None)
                 }
-                let expected_creation_data = expected_creation_data.as_ref().unwrap();
-                (*chain, compare(artifacts, expected_creation_data))
+                let expected_creation_code = ExpectedCreationBytecode::new(
+                    expected_creation_data.as_ref().unwrap().creation_code.clone(),
+                );
+                (*chain, compare(artifacts, &expected_creation_code))
             })
             .collect::<HashMap<_, _>>();
 

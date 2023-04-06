@@ -5,6 +5,7 @@
 
 [dependencies]
   axum = "0.6.11"
+  ciborium = "0.2.0"
   colored = "2.0.0"
   config = "0.13.3"
   dotenvy = "0.15.6"
