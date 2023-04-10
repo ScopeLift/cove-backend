@@ -153,10 +153,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
         }
         println!("    Build succeeded, comparing creation code.");
 
-        let artifacts = project.get_artifacts().map_err(|e| {
-            VerifyError::InternalServerError(format!("Could not find artifacts: {}", e))
-        })?;
-        let matches = provider.compare_creation_code(artifacts, &creation_data);
+        let matches = provider.compare_creation_code(&project, &creation_data);
 
         if matches.is_all_none() {
             println!("    No matching contracts found, continuing to next build command.");

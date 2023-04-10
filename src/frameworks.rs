@@ -1,4 +1,11 @@
 /// Module for abstracting framework-specific logic.
+use crate::bytecode::{
+    parse_metadata, ExpectedCreationBytecode, FoundCreationBytecode, MetadataInfo,
+};
+use ethers::{
+    solc::artifacts::{BytecodeHash, SettingsMetadata},
+    types::Bytes,
+};
 use std::{
     error::Error,
     fs,
@@ -15,6 +22,22 @@ pub trait Framework {
     fn is_supported(path: &Path) -> bool;
     fn build_commands(&self) -> Result<Vec<Command>, Box<dyn Error>>;
     fn get_artifacts(&self) -> Result<Vec<PathBuf>, Box<dyn Error>>;
+
+    // Bytecode structuring.
+    fn structure_found_creation_code(
+        &self,
+        artifact: &Path,
+    ) -> Result<FoundCreationBytecode, Box<dyn Error>>;
+    fn structure_expected_creation_code(
+        &self,
+        artifact: &Path,
+        expected: &Bytes,
+    ) -> Result<ExpectedCreationBytecode, Box<dyn Error>>;
+
+    // Artifact parsing.
+    fn get_artifact_creation_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>>;
+    fn get_artifact_deployed_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>>;
+    fn get_artifact_metadata_settings(artifact: &Path) -> Result<SettingsMetadata, Box<dyn Error>>;
 }
 
 pub struct Foundry {
@@ -133,5 +156,230 @@ impl Framework for Foundry {
         }
 
         Ok(Self::filter_artifacts(artifacts))
+    }
+
+    fn structure_found_creation_code(
+        &self,
+        artifact: &Path,
+    ) -> Result<FoundCreationBytecode, Box<dyn Error>> {
+        let metadata_settings = Self::get_artifact_metadata_settings(artifact)?;
+        let raw_code = Self::get_artifact_creation_code(artifact)?;
+        let bytecode_hash = metadata_settings.bytecode_hash.unwrap_or(BytecodeHash::None);
+        let append_cbor = metadata_settings.cbor_metadata.unwrap_or(false);
+
+        let (leading_code, metadata) = if bytecode_hash == BytecodeHash::None && !append_cbor {
+            // If `bytecodeHash = none` AND `appendCBOR = false`, there is no metadata, so
+            // everything we have is the leading code.
+            (raw_code.clone(), MetadataInfo::default())
+        } else {
+            // If bytecodeHash != none OR appendCBOR = true, some metadata hash is present,
+            // so we slice the bytes based on metadata length to get the leading code and metadata.
+            let metadata = parse_metadata(&raw_code);
+            let (leading_code, _) =
+                raw_code.split_at(metadata.start_index.unwrap_or(raw_code.len()));
+            (leading_code.to_vec().into(), metadata)
+        };
+
+        Ok(FoundCreationBytecode { raw_code, leading_code, metadata })
+    }
+
+    fn structure_expected_creation_code(
+        &self,
+        _artifact: &Path,
+        _expected: &Bytes,
+    ) -> Result<ExpectedCreationBytecode, Box<dyn Error>> {
+        todo!();
+    }
+
+    fn get_artifact_creation_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>> {
+        let file_content = fs::read_to_string(artifact)?;
+        let json_content: serde_json::Value = serde_json::from_str(&file_content)?;
+        let creation_code_value = json_content
+            .get("bytecode")
+            .ok_or_else(|| {
+                format!("Missing 'bytecode' field in artifact JSON: {}", artifact.display())
+            })?
+            .get("object")
+            .ok_or_else(|| {
+                format!("Missing 'object' field in bytecode JSON: {}", artifact.display())
+            })?;
+        let creation_code: Bytes = serde_json::from_value(creation_code_value.clone())?;
+        Ok(creation_code)
+    }
+
+    fn get_artifact_deployed_code(_artifact: &Path) -> Result<Bytes, Box<dyn Error>> {
+        todo!();
+    }
+
+    fn get_artifact_metadata_settings(artifact: &Path) -> Result<SettingsMetadata, Box<dyn Error>> {
+        let file_content = fs::read_to_string(artifact)?;
+        let json_content: serde_json::Value = serde_json::from_str(&file_content)?;
+        let settings_value = json_content
+            .get("metadata")
+            .ok_or_else(|| {
+                format!("Missing 'metadata' field in artifact JSON: {}", artifact.display())
+            })?
+            .get("settings")
+            .ok_or_else(|| {
+                format!("Missing 'settings' field in metadata JSON: {}", artifact.display())
+            })?;
+        let settings_metadata: SettingsMetadata = serde_json::from_value(settings_value.clone())?;
+        Ok(settings_metadata)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ethers::solc::artifacts::{BytecodeHash, SettingsMetadata};
+    use serde_json::json;
+    use std::{error::Error, fs::File, io::Write, path::PathBuf, str::FromStr};
+    use tempfile::NamedTempFile;
+
+    // Helper function to create a temporary file with the given JSON content.
+    fn create_test_artifact(
+        artifact: &NamedTempFile,
+        content: &serde_json::Value,
+    ) -> Result<PathBuf, Box<dyn Error>> {
+        let path = artifact.path().to_path_buf();
+        let mut file = File::create(&path)?;
+        let content_str = content.to_string();
+        file.write_all(content_str.as_bytes())?;
+        Ok(path)
+    }
+
+    #[test]
+    fn structure_found_creation_code() -> Result<(), Box<dyn Error>> {
+        struct TestCase {
+            content: serde_json::Value,
+            expected: FoundCreationBytecode,
+        }
+
+        let test_cases = vec![
+            // Test case 1: BytecodeHash::None and appendCBOR = false
+            TestCase {
+                content: json!({
+                    "bytecode": { "object": "0x1234" },
+                    "metadata": { "settings": { "bytecodeHash": "none", "appendCBOR": false } },
+                }),
+                expected: FoundCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234")?,
+                    leading_code: Bytes::from_str("0x1234")?,
+                    metadata: MetadataInfo::default(),
+                },
+            },
+            // Test case 2: BytecodeHash::Ipfs and appendCBOR = true
+            TestCase {
+                content: json!({
+                    "bytecode": { "object": "0x1234567890abcdef0002" },
+                    "metadata": { "settings": { "bytecodeHash": "ipfs", "appendCBOR": true } },
+                }),
+                expected: FoundCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234567890abcdef0002")?,
+                    leading_code: Bytes::from_str("0x1234567890ab")?,
+                    metadata: MetadataInfo {
+                        hash: Some(Bytes::from_str("0xcdef0002")?),
+                        start_index: Some(6),
+                        end_index: Some(10),
+                    },
+                },
+            },
+        ];
+
+        let foundry = Foundry { path: PathBuf::new() };
+        let artifact_path = tempfile::NamedTempFile::new()?;
+        for test_case in test_cases {
+            let artifact = create_test_artifact(&artifact_path, &test_case.content)?;
+            let result = foundry.structure_found_creation_code(&artifact)?;
+            assert_eq!(result, test_case.expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_artifact_creation_code() -> Result<(), Box<dyn Error>> {
+        struct TestCase {
+            content: serde_json::Value,
+            expected: Bytes,
+        }
+
+        let test_cases = vec![
+            // Test case 1: Creation code is present.
+            TestCase {
+                content: json!({ "bytecode": { "object": "0x1234" }}),
+                expected: Bytes::from_str("0x1234")?,
+            },
+            // Test case 2: Creation code is missing.
+            TestCase {
+                content: json!({ "bytecode": { "object": "" }}),
+                expected: Bytes::from_str("")?,
+            },
+        ];
+
+        for test_case in test_cases {
+            let artifact = NamedTempFile::new()?;
+            let path = create_test_artifact(&artifact, &test_case.content)?;
+            let creation_code = Foundry::get_artifact_creation_code(&path)?;
+            assert_eq!(creation_code, test_case.expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_artifact_metadata_settings() -> Result<(), Box<dyn Error>> {
+        struct TestCase {
+            content: serde_json::Value,
+            expected: SettingsMetadata,
+        }
+
+        let test_cases = vec![
+            // Test case 1: Both `bytecodeHash` and `appendCBOR` fields are present.
+            TestCase {
+                content: json!({ "metadata": { "settings": { "bytecodeHash": "ipfs", "appendCBOR": true }}}),
+                expected: SettingsMetadata {
+                    use_literal_content: None,
+                    bytecode_hash: Some(BytecodeHash::Ipfs),
+                    cbor_metadata: Some(true),
+                },
+            },
+            // Test case 2: both `bytecodeHash` and `appendCBOR` fields are missing
+            TestCase {
+                content: json!({ "metadata": { "settings": {} } }),
+                expected: SettingsMetadata {
+                    use_literal_content: None,
+                    bytecode_hash: None,
+                    cbor_metadata: None,
+                },
+            },
+            // Test case 3: `bytecodeHash` field is present, `appendCBOR` field is missing
+            TestCase {
+                content: json!({ "metadata": { "settings": { "bytecodeHash": "bzzr1" } } }),
+                expected: SettingsMetadata {
+                    use_literal_content: None,
+                    bytecode_hash: Some(BytecodeHash::Bzzr1),
+                    cbor_metadata: None,
+                },
+            },
+            // Test case 4: `bytecodeHash` field is missing, `appendCBOR` field is present
+            TestCase {
+                content: json!({ "metadata": { "settings": { "appendCBOR": false } } }),
+                expected: SettingsMetadata {
+                    use_literal_content: None,
+                    bytecode_hash: None,
+                    cbor_metadata: Some(false),
+                },
+            },
+        ];
+
+        let artifact_path = tempfile::NamedTempFile::new()?;
+        for test_case in test_cases {
+            let artifact = create_test_artifact(&artifact_path, &test_case.content)?;
+            let result = Foundry::get_artifact_metadata_settings(&artifact)?;
+            assert_eq!(result, test_case.expected);
+        }
+
+        Ok(())
     }
 }

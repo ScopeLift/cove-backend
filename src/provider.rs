@@ -1,11 +1,11 @@
-use crate::bytecode::{ExpectedCreationBytecode, FoundCreationBytecode};
+use crate::{bytecode::creation_code_equality_check, frameworks::Framework};
 use colored::Colorize;
 use ethers::{
     providers::{Http, Middleware, Provider},
     types::{Address, BlockId, BlockNumber, Bytes, Chain, TxHash, U256},
 };
 use futures::future;
-use std::{collections::HashMap, env, error::Error, fs, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, env, error::Error, path::PathBuf, str::FromStr, sync::Arc};
 
 pub struct ContractCreation {
     pub tx_hash: TxHash,
@@ -135,25 +135,19 @@ impl MultiChainProvider {
 
     pub fn compare_creation_code(
         &self,
-        artifacts: Vec<PathBuf>,
+        project: &impl Framework,
         creation_data: &ChainResponse<ContractCreation>,
     ) -> ChainResponse<PathBuf> {
-        fn compare(
-            artifacts: Vec<PathBuf>,
-            expected_creation_code: &ExpectedCreationBytecode,
-        ) -> Option<PathBuf> {
+        fn compare(project: &impl Framework, expected_creation_code: &Bytes) -> Option<PathBuf> {
+            let artifacts = project.get_artifacts().unwrap();
             for artifact in artifacts {
-                let content = fs::read_to_string(&artifact).unwrap();
-                let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-                if let Some(bytecode_value) = json.get("bytecode").unwrap().get("object") {
-                    if let Some(bytecode_str) = bytecode_value.as_str() {
-                        let found_creation_code =
-                            FoundCreationBytecode::new(Bytes::from_str(bytecode_str).unwrap());
+                let found = project.structure_found_creation_code(&artifact).unwrap();
+                let expected = project
+                    .structure_expected_creation_code(&artifact, expected_creation_code)
+                    .unwrap();
 
-                        if expected_creation_code.is_equal_to(&found_creation_code) {
-                            return Some(artifact)
-                        }
-                    }
+                if creation_code_equality_check(&found, &expected) {
+                    return Some(artifact)
                 }
             }
             None
@@ -163,15 +157,13 @@ impl MultiChainProvider {
             .providers
             .keys()
             .map(|chain| {
-                let artifacts = artifacts.clone();
                 let expected_creation_data = creation_data.responses.get(chain).unwrap();
                 if expected_creation_data.is_none() {
                     return (*chain, None)
                 }
-                let expected_creation_code = ExpectedCreationBytecode::new(
-                    expected_creation_data.as_ref().unwrap().creation_code.clone(),
-                );
-                (*chain, compare(artifacts, &expected_creation_code))
+                let expected_creation_code =
+                    &expected_creation_data.as_ref().unwrap().creation_code;
+                (*chain, compare(project, expected_creation_code))
             })
             .collect::<HashMap<_, _>>();
 
