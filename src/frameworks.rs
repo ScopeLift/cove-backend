@@ -255,8 +255,20 @@ impl Framework for Foundry {
         Ok(creation_code)
     }
 
-    fn get_artifact_deployed_code(_artifact: &Path) -> Result<Bytes, Box<dyn Error>> {
-        todo!();
+    fn get_artifact_deployed_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>> {
+        let file_content = fs::read_to_string(artifact)?;
+        let json_content: serde_json::Value = serde_json::from_str(&file_content)?;
+        let creation_code_value = json_content
+            .get("deployedBytecode")
+            .ok_or_else(|| {
+                format!("Missing 'bytecode' field in artifact JSON: {}", artifact.display())
+            })?
+            .get("object")
+            .ok_or_else(|| {
+                format!("Missing 'object' field in bytecode JSON: {}", artifact.display())
+            })?;
+        let creation_code: Bytes = serde_json::from_value(creation_code_value.clone())?;
+        Ok(creation_code)
     }
 
     fn get_artifact_metadata_settings(artifact: &Path) -> Result<SettingsMetadata, Box<dyn Error>> {
@@ -529,6 +541,36 @@ mod tests {
             let artifact = NamedTempFile::new()?;
             let path = create_test_artifact(&artifact, &test_case.content)?;
             let creation_code = Foundry::get_artifact_creation_code(&path)?;
+            assert_eq!(creation_code, test_case.expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_artifact_deployed_code() -> Result<(), Box<dyn Error>> {
+        struct TestCase {
+            content: serde_json::Value,
+            expected: Bytes,
+        }
+
+        let test_cases = vec![
+            // Test case 1: Deployed code is present.
+            TestCase {
+                content: json!({ "deployedBytecode": { "object": "0x1234" }}),
+                expected: Bytes::from_str("0x1234")?,
+            },
+            // Test case 2: Deployed code is missing.
+            TestCase {
+                content: json!({ "deployedBytecode": { "object": "" }}),
+                expected: Bytes::from_str("")?,
+            },
+        ];
+
+        for test_case in test_cases {
+            let artifact = NamedTempFile::new()?;
+            let path = create_test_artifact(&artifact, &test_case.content)?;
+            let creation_code = Foundry::get_artifact_deployed_code(&path)?;
             assert_eq!(creation_code, test_case.expected);
         }
 
