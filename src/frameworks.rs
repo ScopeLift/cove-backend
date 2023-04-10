@@ -13,7 +13,7 @@ use std::{
     process::Command,
     result::Result,
 };
-use walkdir::{DirEntry, WalkDir};
+use walkdir::WalkDir;
 
 pub trait Framework {
     fn new(path: &Path) -> Result<Self, Box<dyn Error + Send + Sync>>
@@ -135,19 +135,15 @@ impl Framework for Foundry {
     fn get_artifacts(&self) -> Result<Vec<PathBuf>, Box<dyn Error>> {
         let mut artifacts = Vec::new();
 
-        fn is_out_dir(entry: &DirEntry) -> bool {
-            entry.file_type().is_dir()
-                && entry.file_name().to_string_lossy().to_lowercase().contains("out")
-        }
-
         let out_dirs =
-            WalkDir::new(&self.path).min_depth(1).max_depth(1).into_iter().filter_entry(is_out_dir);
+            WalkDir::new(&self.path).min_depth(1).max_depth(1).into_iter().filter_entry(|entry| {
+                entry.file_type().is_dir()
+                    && entry.file_name().to_string_lossy().to_lowercase().contains("out")
+            });
 
-        for entry in out_dirs {
-            let entry = entry?;
+        for entry in out_dirs.into_iter().filter_map(Result::ok) {
             if entry.path().is_dir() {
-                for inner_entry in WalkDir::new(entry.path()) {
-                    let inner_entry = inner_entry?;
+                for inner_entry in WalkDir::new(entry.path()).into_iter().filter_map(Result::ok) {
                     if inner_entry.file_type().is_file()
                         && inner_entry.path().extension().map_or(false, |ext| ext == "json")
                     {

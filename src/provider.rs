@@ -140,6 +140,10 @@ impl MultiChainProvider {
     ) -> ChainResponse<PathBuf> {
         fn compare(project: &impl Framework, expected_creation_code: &Bytes) -> Option<PathBuf> {
             let artifacts = project.get_artifacts().unwrap();
+            // TODO Better error handling here.
+            if artifacts.is_empty() {
+                panic!("No artifacts found in project");
+            }
             for artifact in artifacts {
                 let found = project.structure_found_creation_code(&artifact).unwrap();
                 let expected = project
