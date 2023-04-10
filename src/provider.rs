@@ -143,7 +143,7 @@ impl MultiChainProvider {
             for artifact in artifacts {
                 let found = project.structure_found_creation_code(&artifact).unwrap();
                 let expected = project
-                    .structure_expected_creation_code(&artifact, expected_creation_code)
+                    .structure_expected_creation_code(&artifact, &found, expected_creation_code)
                     .unwrap();
 
                 if creation_code_equality_check(&found, &expected) {

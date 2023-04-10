@@ -31,6 +31,7 @@ pub trait Framework {
     fn structure_expected_creation_code(
         &self,
         artifact: &Path,
+        found: &FoundCreationBytecode,
         expected: &Bytes,
     ) -> Result<ExpectedCreationBytecode, Box<dyn Error>>;
 
@@ -187,9 +188,46 @@ impl Framework for Foundry {
     fn structure_expected_creation_code(
         &self,
         _artifact: &Path,
-        _expected: &Bytes,
+        found: &FoundCreationBytecode,
+        expected: &Bytes,
     ) -> Result<ExpectedCreationBytecode, Box<dyn Error>> {
-        todo!();
+        // Leading code is everything up until the found's metadata hash start index.
+        let raw_code_len = found.raw_code.len();
+        let leading_code: Bytes =
+            expected.split_at(found.metadata.start_index.unwrap_or(raw_code_len)).0.to_vec().into();
+
+        // Metadata hash is given by the found's metadata hash start and end indices, if they are
+        // present, otherwise it's None.
+        let metadata_hash: Option<Bytes> = if let (Some(start_index), Some(end_index)) =
+            (found.metadata.start_index, found.metadata.end_index)
+        {
+            Some(expected[start_index..end_index].to_vec().into())
+        } else {
+            None
+        };
+
+        // The encoded constructor arguments are everything that's left.
+        let accumulated_len =
+            leading_code.len() + metadata_hash.as_ref().map_or(0, |hash| hash.len());
+        let encoded_constructor_args: Option<Bytes> = if expected.len() > accumulated_len {
+            // The remaining bytes are the encoded constructor arguments.
+            Some(expected.split_at(accumulated_len).1.to_vec().into())
+        } else {
+            None
+        };
+
+        let metadata = MetadataInfo {
+            hash: metadata_hash,
+            start_index: found.metadata.start_index,
+            end_index: found.metadata.end_index,
+        };
+
+        Ok(ExpectedCreationBytecode {
+            raw_code: expected.clone(),
+            leading_code,
+            metadata,
+            constructor_args: encoded_constructor_args,
+        })
     }
 
     fn get_artifact_abi(artifact: &Path) -> Result<LosslessAbi, Box<dyn Error>> {
@@ -302,6 +340,131 @@ mod tests {
             let artifact = create_test_artifact(&artifact_path, &test_case.content)?;
             let result = foundry.structure_found_creation_code(&artifact)?;
             assert_eq!(result, test_case.expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn structure_expected_creation_code() -> Result<(), Box<dyn Error>> {
+        struct TestCase {
+            description: String,
+            found: FoundCreationBytecode,
+            expected: Bytes,
+            expected_output: ExpectedCreationBytecode,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                description: "Test case 1: No metadata, no constructor args.".to_string(),
+                found: FoundCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234")?,
+                    leading_code: Bytes::from_str("0x1234")?,
+                    metadata: MetadataInfo::default(),
+                },
+                expected: Bytes::from_str("0x1234")?,
+                expected_output: ExpectedCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234")?,
+                    leading_code: Bytes::from_str("0x1234")?,
+                    metadata: MetadataInfo::default(),
+                    constructor_args: None,
+                },
+            },
+            TestCase {
+                description: "Test case 2: Same metadata hash, no constructor args.".to_string(),
+                found: FoundCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234567890abcdef0002")?,
+                    leading_code: Bytes::from_str("0x1234567890ab")?,
+                    metadata: MetadataInfo {
+                        hash: Some(Bytes::from_str("0xcdef0002")?),
+                        start_index: Some(6),
+                        end_index: Some(10),
+                    },
+                },
+                expected: Bytes::from_str("0x1234567890abcdef0002")?,
+                expected_output: ExpectedCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234567890abcdef0002")?,
+                    leading_code: Bytes::from_str("0x1234567890ab")?,
+                    metadata: MetadataInfo {
+                        hash: Some(Bytes::from_str("0xcdef0002")?),
+                        start_index: Some(6),
+                        end_index: Some(10),
+                    },
+                    constructor_args: None,
+                },
+            },
+            TestCase {
+                description: "Test case 3: Different metadata hash, no constructor args."
+                    .to_string(),
+                found: FoundCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234567890abcdef0002")?,
+                    leading_code: Bytes::from_str("0x1234567890ab")?,
+                    metadata: MetadataInfo {
+                        hash: Some(Bytes::from_str("0xcdef0002")?),
+                        start_index: Some(6),
+                        end_index: Some(10),
+                    },
+                },
+                expected: Bytes::from_str("0x1234567890abffff0002")?,
+                expected_output: ExpectedCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234567890abffff0002")?,
+                    leading_code: Bytes::from_str("0x1234567890ab")?,
+                    metadata: MetadataInfo {
+                        hash: Some(Bytes::from_str("0xffff0002")?),
+                        start_index: Some(6),
+                        end_index: Some(10),
+                    },
+                    constructor_args: None,
+                },
+            },
+            TestCase {
+                description: "Test case 4: No metadata hash, constructor args.".to_string(),
+                found: FoundCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234")?,
+                    leading_code: Bytes::from_str("0x1234")?,
+                    metadata: MetadataInfo::default(),
+                },
+                expected: Bytes::from_str("0x12345678")?,
+                expected_output: ExpectedCreationBytecode {
+                    raw_code: Bytes::from_str("0x12345678")?,
+                    leading_code: Bytes::from_str("0x1234")?,
+                    metadata: MetadataInfo::default(),
+                    constructor_args: Some(Bytes::from_str("0x5678")?),
+                },
+            },
+            TestCase {
+                description: "Test case 5: Different metadata hash, constructor args.".to_string(),
+                found: FoundCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234567890abcdef0002")?,
+                    leading_code: Bytes::from_str("0x1234567890ab")?,
+                    metadata: MetadataInfo {
+                        hash: Some(Bytes::from_str("0xcdef0002")?),
+                        start_index: Some(6),
+                        end_index: Some(10),
+                    },
+                },
+                expected: Bytes::from_str("0x1234567890abffff0002aaaaaa")?,
+                expected_output: ExpectedCreationBytecode {
+                    raw_code: Bytes::from_str("0x1234567890abffff0002aaaaaa")?,
+                    leading_code: Bytes::from_str("0x1234567890ab")?,
+                    metadata: MetadataInfo {
+                        hash: Some(Bytes::from_str("0xffff0002")?),
+                        start_index: Some(6),
+                        end_index: Some(10),
+                    },
+                    constructor_args: Some(Bytes::from_str("0xaaaaaa")?),
+                },
+            },
+        ];
+
+        let foundry = Foundry { path: PathBuf::new() };
+        for test_case in test_cases {
+            let result = foundry.structure_expected_creation_code(
+                &PathBuf::new(),
+                &test_case.found,
+                &test_case.expected,
+            )?;
+            assert_eq!(result, test_case.expected_output, "{}", test_case.description);
         }
 
         Ok(())

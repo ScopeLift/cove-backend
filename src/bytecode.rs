@@ -19,7 +19,7 @@ pub struct ExpectedCreationBytecode {
     pub raw_code: Bytes,
     pub leading_code: Bytes,
     pub metadata: MetadataInfo,
-    pub constructor_args: Option<Vec<Bytes>>,
+    pub constructor_args: Option<Bytes>,
 }
 
 pub fn creation_code_equality_check(
