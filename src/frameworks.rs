@@ -3,7 +3,7 @@ use crate::bytecode::{
     parse_metadata, ExpectedCreationBytecode, FoundCreationBytecode, MetadataInfo,
 };
 use ethers::{
-    solc::artifacts::{BytecodeHash, SettingsMetadata},
+    solc::artifacts::{BytecodeHash, LosslessAbi, SettingsMetadata},
     types::Bytes,
 };
 use std::{
@@ -35,6 +35,7 @@ pub trait Framework {
     ) -> Result<ExpectedCreationBytecode, Box<dyn Error>>;
 
     // Artifact parsing.
+    fn get_artifact_abi(artifact: &Path) -> Result<LosslessAbi, Box<dyn Error>>;
     fn get_artifact_creation_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>>;
     fn get_artifact_deployed_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>>;
     fn get_artifact_metadata_settings(artifact: &Path) -> Result<SettingsMetadata, Box<dyn Error>>;
@@ -191,6 +192,15 @@ impl Framework for Foundry {
         todo!();
     }
 
+    fn get_artifact_abi(artifact: &Path) -> Result<LosslessAbi, Box<dyn Error>> {
+        let file_content = fs::read_to_string(artifact)?;
+        let json_content: serde_json::Value = serde_json::from_str(&file_content)?;
+        let abi_value = json_content
+            .get("abi")
+            .ok_or(format!("Missing 'bytecode' field in artifact JSON: {}", artifact.display()))?;
+        Ok(serde_json::from_value(abi_value.clone())?)
+    }
+
     fn get_artifact_creation_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>> {
         let file_content = fs::read_to_string(artifact)?;
         let json_content: serde_json::Value = serde_json::from_str(&file_content)?;
@@ -292,6 +302,41 @@ mod tests {
             let artifact = create_test_artifact(&artifact_path, &test_case.content)?;
             let result = foundry.structure_found_creation_code(&artifact)?;
             assert_eq!(result, test_case.expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_artifact_abi() -> Result<(), Box<dyn Error>> {
+        struct TestCase {
+            content: serde_json::Value,
+            expected_num_methods: usize,
+            expected_constructor: bool,
+        }
+
+        #[rustfmt::skip]
+        let test_cases = vec![
+            // Test case 1: Counter contract with no constructor.
+            TestCase {
+                content: json!({ "abi": [ { "inputs": [], "name": "increment", "outputs": [], "stateMutability": "nonpayable", "type": "function" }, { "inputs": [], "name": "number", "outputs": [ { "internalType": "uint256", "name": "", "type": "uint256" } ], "stateMutability": "view", "type": "function" }, { "inputs": [ { "internalType": "uint256", "name": "newNumber", "type": "uint256" } ], "name": "setNumber", "outputs": [], "stateMutability": "nonpayable", "type": "function" } ] }),
+                expected_num_methods: 3,
+                expected_constructor: false,
+            },
+            // Test case 1: Counter contract with constructor.
+            TestCase {
+                content: json!({ "abi": [ { "inputs": [ { "internalType": "uint256", "name": "initialNumber", "type": "uint256" } ], "stateMutability": "nonpayable", "type": "constructor" }, { "inputs": [], "name": "increment", "outputs": [], "stateMutability": "nonpayable", "type": "function" }, { "inputs": [], "name": "number", "outputs": [ { "internalType": "uint256", "name": "", "type": "uint256" } ], "stateMutability": "view", "type": "function" }, { "inputs": [ { "internalType": "uint256", "name": "newNumber", "type": "uint256" } ], "name": "setNumber", "outputs": [], "stateMutability": "nonpayable", "type": "function" } ] }),
+                expected_num_methods: 3,
+                expected_constructor: true,
+            },
+        ];
+
+        for test_case in test_cases {
+            let artifact = NamedTempFile::new()?;
+            let path = create_test_artifact(&artifact, &test_case.content)?;
+            let abi = Foundry::get_artifact_abi(&path)?;
+            assert_eq!(abi.abi.functions.len(), test_case.expected_num_methods);
+            assert_eq!(abi.abi.constructor.is_some(), test_case.expected_constructor);
         }
 
         Ok(())
