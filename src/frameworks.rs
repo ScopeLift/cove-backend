@@ -187,6 +187,10 @@ impl Framework for Foundry {
         found: &FoundCreationBytecode,
         expected: &Bytes,
     ) -> Result<ExpectedCreationBytecode, Box<dyn Error>> {
+        if expected.len() < found.leading_code.len() {
+            return Err("Expected creation bytecode is shorter than found creation bytecode.".into())
+        }
+
         // Leading code is everything up until the found's metadata hash start index.
         let raw_code_len = found.raw_code.len();
         let leading_code: Bytes =
@@ -355,6 +359,35 @@ mod tests {
 
     #[test]
     fn structure_expected_creation_code() -> Result<(), Box<dyn Error>> {
+        let foundry = Foundry { path: PathBuf::new() };
+
+        // First test the case where expected code is too short to structure.
+        struct FailureTestCase {
+            description: String,
+            found: FoundCreationBytecode,
+            expected: Bytes,
+        }
+
+        let test_cases = vec![FailureTestCase {
+            description: "Test case error 1: Expected code too short.".to_string(),
+            found: FoundCreationBytecode {
+                raw_code: Bytes::from_str("0x123456")?,
+                leading_code: Bytes::from_str("0x123456")?,
+                metadata: MetadataInfo::default(),
+            },
+            expected: Bytes::from_str("0x1234")?,
+        }];
+
+        for test_case in test_cases {
+            let result = foundry.structure_expected_creation_code(
+                &PathBuf::new(),
+                &test_case.found,
+                &test_case.expected,
+            );
+            assert!(result.is_err(), "{}", test_case.description);
+        }
+
+        // Now test success cases.
         struct TestCase {
             description: String,
             found: FoundCreationBytecode,
@@ -465,7 +498,6 @@ mod tests {
             },
         ];
 
-        let foundry = Foundry { path: PathBuf::new() };
         for test_case in test_cases {
             let result = foundry.structure_expected_creation_code(
                 &PathBuf::new(),

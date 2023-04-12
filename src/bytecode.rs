@@ -1,5 +1,12 @@
 use ethers::types::Bytes;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum MatchType {
+    Full,
+    Partial,
+    None,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct MetadataInfo {
     pub hash: Option<Bytes>,
@@ -25,8 +32,16 @@ pub struct ExpectedCreationBytecode {
 pub fn creation_code_equality_check(
     found: &FoundCreationBytecode,
     expected: &ExpectedCreationBytecode,
-) -> bool {
-    todo!("found {:?}, expected {:?}", found, expected);
+) -> MatchType {
+    if found.raw_code == expected.raw_code {
+        return MatchType::Full
+    }
+
+    if found.leading_code == expected.leading_code {
+        return MatchType::Partial
+    }
+
+    MatchType::None
 }
 
 // The implied length returned by this method, i.e. `end_index - start_index`, is the decimal value

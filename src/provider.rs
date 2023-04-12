@@ -1,4 +1,7 @@
-use crate::{bytecode::creation_code_equality_check, frameworks::Framework};
+use crate::{
+    bytecode::{creation_code_equality_check, MatchType},
+    frameworks::Framework,
+};
 use colored::Colorize;
 use ethers::{
     providers::{Http, Middleware, Provider},
@@ -144,17 +147,33 @@ impl MultiChainProvider {
             if artifacts.is_empty() {
                 panic!("No artifacts found in project");
             }
-            for artifact in artifacts {
-                let found = project.structure_found_creation_code(&artifact).unwrap();
-                let expected = project
-                    .structure_expected_creation_code(&artifact, &found, expected_creation_code)
-                    .unwrap();
 
-                if creation_code_equality_check(&found, &expected) {
-                    return Some(artifact)
+            let mut best_artifact_match: Option<PathBuf> = None;
+            for artifact in artifacts {
+                let found = match project.structure_found_creation_code(&artifact) {
+                    Ok(found) => found,
+                    Err(_) => continue,
+                };
+
+                let expected = match project.structure_expected_creation_code(
+                    &artifact,
+                    &found,
+                    expected_creation_code,
+                ) {
+                    Ok(expected) => expected,
+                    Err(_) => continue,
+                };
+
+                // If we have an exact match, return it. If we have a partial match, save it off.
+                // We'll return it if we don't find an exact match. Note that treats all partial
+                // matches equally and arbitrarily gives priority to the last one.
+                match creation_code_equality_check(&found, &expected) {
+                    MatchType::Full => return Some(artifact),
+                    MatchType::Partial => best_artifact_match = Some(artifact),
+                    _ => {}
                 }
             }
-            None
+            best_artifact_match
         }
 
         let responses = self
