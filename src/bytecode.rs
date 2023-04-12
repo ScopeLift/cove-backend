@@ -1,4 +1,5 @@
-use ethers::types::Bytes;
+use ethers::{solc::artifacts::Offsets, types::Bytes};
+use std::collections::BTreeMap;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MatchType {
@@ -29,16 +30,88 @@ pub struct ExpectedCreationBytecode {
     pub constructor_args: Option<Bytes>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct FoundDeployedBytecode {
+    pub raw_code: Bytes,
+    pub leading_code: Bytes,
+    pub metadata: MetadataInfo,
+    pub immutable_references: BTreeMap<String, Vec<Offsets>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ExpectedDeployedBytecode {
+    pub raw_code: Bytes,
+    pub leading_code: Bytes,
+    pub metadata: MetadataInfo,
+    pub immutable_references: BTreeMap<String, Vec<Offsets>>,
+}
+
 pub fn creation_code_equality_check(
     found: &FoundCreationBytecode,
     expected: &ExpectedCreationBytecode,
 ) -> MatchType {
+    // Expected code might contain appended constructor arguments, so if code matches then expected
+    // can only be equal to or longer than found code.
+    if found.raw_code.len() > expected.raw_code.len() {
+        return MatchType::None
+    }
+    if found.raw_code == expected.raw_code {
+        return MatchType::Full
+    }
+    if found.leading_code == expected.leading_code {
+        return MatchType::Partial
+    }
+
+    MatchType::None
+}
+
+pub fn deployed_code_equality_check(
+    found: &FoundDeployedBytecode,
+    expected: &ExpectedDeployedBytecode,
+) -> MatchType {
+    // Expected and found code must have the same length.
+    if found.raw_code.len() != expected.raw_code.len() {
+        return MatchType::None
+    }
+
     if found.raw_code == expected.raw_code {
         return MatchType::Full
     }
 
-    if found.leading_code == expected.leading_code {
-        return MatchType::Partial
+    // Compare the leading code, but skip all chunks that contain immutables.
+    if found.immutable_references == expected.immutable_references {
+        // Flatten the map to just a vec of the references. Since we know found and expected have
+        // equal immutable references, we can just use the found ones.
+        let mut offsets: Vec<Offsets> = Vec::new();
+        for new_offsets in found.immutable_references.values() {
+            offsets.extend(new_offsets.iter().cloned());
+        }
+
+        let mut start: usize = 0;
+        let mut matches = true;
+
+        for offset in offsets {
+            // Slice the bytecode from the `start` index until the immutable's start index.
+            let immutable_start: usize = offset.start.try_into().unwrap();
+            let found_chunk = &found.leading_code[start..immutable_start];
+            let expected_chunk = &expected.leading_code[start..immutable_start];
+
+            // If the chunks don't match, code does not match.
+            if found_chunk != expected_chunk {
+                matches = false;
+                break
+            }
+
+            // If the chunks do match, update `start` to be after the immutable and keep looping
+            // through the offsets.
+            let immutable_length: usize = offset.length.try_into().unwrap();
+            start += immutable_length;
+        }
+
+        // Now we check the final chunk of the bytecode after the last immutable.
+        if matches && found.leading_code[start..] == expected.leading_code[start..] {
+            return MatchType::Partial
+        }
     }
 
     MatchType::None
