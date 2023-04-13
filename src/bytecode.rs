@@ -1,7 +1,8 @@
 use ethers::{solc::artifacts::Offsets, types::Bytes};
+use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum MatchType {
     Full,
     Partial,

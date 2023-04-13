@@ -16,6 +16,12 @@ pub struct ContractCreation {
     pub creation_code: Bytes,
 }
 
+#[derive(Debug, Clone)]
+pub struct ContractMatch {
+    pub artifact: PathBuf,
+    pub match_type: MatchType,
+}
+
 fn print_color_by_chain(text: String, chain: Chain) {
     match chain {
         Chain::Goerli => println!("{}", text.yellow()),
@@ -140,15 +146,18 @@ impl MultiChainProvider {
         &self,
         project: &impl Framework,
         creation_data: &ChainResponse<ContractCreation>,
-    ) -> ChainResponse<PathBuf> {
-        fn compare(project: &impl Framework, expected_creation_code: &Bytes) -> Option<PathBuf> {
+    ) -> ChainResponse<ContractMatch> {
+        fn compare(
+            project: &impl Framework,
+            expected_creation_code: &Bytes,
+        ) -> Option<ContractMatch> {
             let artifacts = project.get_artifacts().unwrap();
             // TODO Better error handling here.
             if artifacts.is_empty() {
                 panic!("No artifacts found in project");
             }
 
-            let mut best_artifact_match: Option<PathBuf> = None;
+            let mut best_artifact_match: Option<ContractMatch> = None;
             for artifact in artifacts {
                 let found = match project.structure_found_creation_code(&artifact) {
                     Ok(found) => found,
@@ -168,8 +177,13 @@ impl MultiChainProvider {
                 // We'll return it if we don't find an exact match. Note that treats all partial
                 // matches equally and arbitrarily gives priority to the last one.
                 match creation_code_equality_check(&found, &expected) {
-                    MatchType::Full => return Some(artifact),
-                    MatchType::Partial => best_artifact_match = Some(artifact),
+                    MatchType::Full => {
+                        return Some(ContractMatch { artifact, match_type: MatchType::Full })
+                    }
+                    MatchType::Partial => {
+                        best_artifact_match =
+                            Some(ContractMatch { artifact, match_type: MatchType::Partial })
+                    }
                     _ => {}
                 }
             }
