@@ -1,7 +1,7 @@
 use crate::{
     bytecode::MatchType,
     frameworks::{Foundry, Framework},
-    provider::{contract_runtime_code, ContractMatch, MultiChainProvider},
+    provider::{ChainResponse, MultiChainProvider},
 };
 use axum::{
     http::StatusCode,
@@ -47,15 +47,13 @@ struct SuccessfulVerification {
     repo_url: String,
     repo_commit: String,
     contract_address: Address,
-    creation_code_match_type: MatchType,
-    chains: Vec<Chain>, // All chains this address has verified code on.
-    chain: Chain,       // The chain data is being returned for.
-    creation_tx_hash: TxHash,
-    creation_block_number: u64,
-    creation_code: Bytes,
+    matches: HashMap<Chain, VerificationMatch>,
+    creation_tx_hash: Option<TxHash>,
+    creation_block_number: Option<u64>,
+    creation_code: Option<Bytes>,
     sources: Vec<SourceFile>,
     runtime_code: Bytes,
-    creation_bytecode: CompactBytecode,
+    creation_bytecode: Option<CompactBytecode>,
     deployed_bytecode: CompactDeployedBytecode,
     abi: LosslessAbi,
     compiler_info: CompilerInfo,
@@ -66,6 +64,13 @@ struct SuccessfulVerification {
 struct SourceFile {
     path: PathBuf,
     content: String,
+}
+
+#[derive(Serialize)]
+pub struct VerificationMatch {
+    artifact: PathBuf,
+    creation_code_match_type: MatchType,
+    deployed_code_match_type: MatchType,
 }
 
 pub enum VerifyError {
@@ -107,22 +112,29 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     println!("  Commit Hash:      {}", commit_hash);
     println!("  Contract Address: {:?}", contract_addr);
 
-    println!("\nFETCHING CREATION CODE");
+    println!("\nFETCHING CODE");
     let provider = MultiChainProvider::default();
-    let creation_data = provider
-        .get_creation_code(contract_addr)
-        .await
-        .map_err(|e| VerifyError::BadRequest(format!("Could not fetch creation code: {}", e)))?;
-    println!("  Found creation code on the following chains: {:?}", creation_data.responses.keys());
+
+    // We must have deployed code, but we may not be able to get creation code.
+    let deployed_code = provider.get_deployed_code(contract_addr).await.map_err(|e| {
+        VerifyError::InternalServerError(format!("Could not fetch deployed code: {}", e))
+    })?;
+    if deployed_code.is_all_none() {
+        let msg = format!("No deployed code found for contract {:?}", contract_addr);
+        return Err(VerifyError::BadRequest(msg))
+    }
+    println!("  Found deployed code on the following chains: {:?}", deployed_code.responses.keys());
+
+    let creation_data = provider.get_creation_code(contract_addr).await;
 
     // Create a temporary directory for the cloned repository.
+    println!("\nCLONING REPOSITORY");
     let temp_dir = TempDir::new().map_err(|e| {
         VerifyError::InternalServerError(format!("Could not create directory to clone repo: {}", e))
     })?;
     let project_path = &temp_dir.path();
 
     // Clone the repository and check out the commit.
-    println!("\nCLONING REPOSITORY");
     clone_repo_and_checkout_commit(repo_url, commit_hash, project_path)
         .await
         .map_err(|e| VerifyError::BadRequest(format!("Could not clone repo: {}", e)))?;
@@ -133,18 +145,18 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
 
     // Get the build commands for the project.
     println!("\nBUILDING CONTRACTS AND COMPARING BYTECODE");
+    std::env::set_current_dir(project_path).map_err(|e| {
+        VerifyError::InternalServerError(format!("Could not set current directory: {}", e))
+    })?;
     let build_commands = project.build_commands().map_err(|e| {
         VerifyError::InternalServerError(format!("Could not find build commands: {}", e))
     })?;
-    let mut verified_contracts: HashMap<Chain, ContractMatch> = HashMap::new();
+    let mut verified_contracts: HashMap<Chain, VerificationMatch> = HashMap::new();
 
     for mut build_command in build_commands {
         println!("  Building with command: {}", format!("{:?}", build_command).replace('"', ""));
 
         // Build the contracts.
-        std::env::set_current_dir(project_path).map_err(|e| {
-            VerifyError::InternalServerError(format!("Could not set current directory: {}", e))
-        })?;
         let build_result = build_command.output().map_err(|e| {
             VerifyError::InternalServerError(format!("Failed to execute command: {}", e))
         })?;
@@ -154,22 +166,94 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
         }
         println!("    Build succeeded, comparing creation code.");
 
-        let matches = provider.compare_creation_code(&project, &creation_data);
+        let deployed_matches = provider.compare_deployed_code(&project, &deployed_code);
+        let creation_matches = match &creation_data {
+            Ok(creation_data) => provider.compare_creation_code(&project, creation_data),
+            Err(_) => ChainResponse::default(),
+        };
 
-        if matches.is_all_none() {
+        if deployed_matches.is_all_none() && creation_matches.is_all_none() {
             println!("    No matching contracts found, continuing to next build command.");
         }
 
+        // We found matches, so save them off.
         // If two profiles match, we overwrite the first with the second. This is ok, because solc
         // inputs to outputs are not necessarily 1:1, e.g. changing optimization settings may not
         // change bytecode. This is likely true for other compilers too.
-        for (chain, contract_match) in matches.iter_entries() {
-            // Extract contract name from path by removing the extension
-            let stem = contract_match.artifact.file_stem().ok_or("Bad file name").map_err(|e| {
-                VerifyError::InternalServerError(format!("Could not split file name: {}", e))
-            })?;
-            println!("    ✅ Found matching contract on chain {:?}: {:?}", chain, stem);
-            verified_contracts.insert(*chain, contract_match.clone());
+        for chain in &provider.chains {
+            let deployed_match = deployed_matches.responses.get(chain).cloned().flatten();
+            let creation_match = creation_matches.responses.get(chain).cloned().flatten();
+            match (deployed_match, creation_match) {
+                (Some(deployed_match), Some(creation_match)) => {
+                    if deployed_match.artifact != creation_match.artifact {
+                        println!("    ❌ Found conflicting matches on chain {:?}:", chain);
+                        println!("        Creation: {:?}", creation_match.artifact);
+                        println!("        Deployed: {:?}", deployed_match.artifact);
+                        println!("        Continuing to next build command.");
+                        continue
+                    }
+                    // Extract contract name from path by removing the extension
+                    let stem = deployed_match.artifact.file_stem().ok_or("Bad file name").map_err(
+                        |e| {
+                            let msg = format!("Could not split file name: {}", e);
+                            VerifyError::InternalServerError(msg)
+                        },
+                    )?;
+                    println!(
+                        "    ✅ Found matching creation and deployed code on chain {:?}: {:?}",
+                        chain, stem
+                    );
+
+                    // Save off the match.
+                    let verification_match = VerificationMatch {
+                        artifact: creation_match.artifact,
+                        creation_code_match_type: creation_match.match_type,
+                        deployed_code_match_type: deployed_match.match_type,
+                    };
+                    verified_contracts.insert(*chain, verification_match);
+                }
+                (Some(deployed_match), None) => {
+                    let stem = deployed_match.artifact.file_stem().ok_or("Bad file name").map_err(
+                        |e| {
+                            let msg = format!("Could not split file name: {}", e);
+                            VerifyError::InternalServerError(msg)
+                        },
+                    )?;
+                    println!(
+                        "    ✅ Found matching deployed code on chain {:?}: {:?}",
+                        chain, stem
+                    );
+
+                    // Save off the match.
+                    let verification_match = VerificationMatch {
+                        artifact: deployed_match.artifact,
+                        creation_code_match_type: MatchType::None,
+                        deployed_code_match_type: deployed_match.match_type,
+                    };
+                    verified_contracts.insert(*chain, verification_match);
+                }
+                (None, Some(creation_match)) => {
+                    let stem = creation_match.artifact.file_stem().ok_or("Bad file name").map_err(
+                        |e| {
+                            let msg = format!("Could not split file name: {}", e);
+                            VerifyError::InternalServerError(msg)
+                        },
+                    )?;
+                    println!(
+                        "    ✅ Found matching creation code on chain {:?}: {:?}",
+                        chain, stem
+                    );
+
+                    // Save off the match.
+                    let verification_match = VerificationMatch {
+                        artifact: creation_match.artifact,
+                        creation_code_match_type: creation_match.match_type,
+                        deployed_code_match_type: MatchType::None,
+                    };
+                    verified_contracts.insert(*chain, verification_match);
+                }
+                (None, None) => {}
+            }
         }
     }
 
@@ -178,20 +262,16 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
             (StatusCode::BAD_REQUEST, "No matching contracts found".to_string()).into_response()
         )
     }
-
-    // If multiple matches found, tell user we are choosing one.
-    if verified_contracts.len() > 1 {
-        println!("\nCONTRACT VERIFICATION SUCCESSFUL!");
-        println!("\nPREPARING RESPONSE");
-        println!("  Multiple matching contracts found, choosing Optimism arbitrarily.");
-    }
+    println!("\nCONTRACT VERIFICATION SUCCESSFUL!");
+    println!("\nPREPARING RESPONSE");
 
     // ======== Format Response ========
     // Format response. If there are multiple chains we verified on, we just return an arbitrary one
     // for now. For now we just hardcode Optimism for demo purposes.
 
-    // Get the artifact for the contract.
-    let contract_match = verified_contracts.get(&Chain::Optimism).unwrap();
+    // Get the artifact for the contract. We just arbitrarily pick the first one.
+    let chain = &verified_contracts.keys().next().unwrap().clone();
+    let contract_match = verified_contracts.get(chain).unwrap();
     let artifact_content = fs::read_to_string(&contract_match.artifact)
         .map_err(|e| VerifyError::InternalServerError(format!("Could not read artifact: {}", e)))?;
     let artifact: ConfigurableContractArtifact =
@@ -263,28 +343,34 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     });
 
     // Get the creation data.
-    let block_num = creation_data.responses.get(&Chain::Optimism).unwrap().as_ref().unwrap().block;
-    let selected_creation_data =
-        creation_data.responses.get(&Chain::Optimism).unwrap().as_ref().unwrap();
+    let block_num = creation_data
+        .as_ref()
+        .ok()
+        .and_then(|data| data.responses.get(chain))
+        .and_then(|resp| resp.as_ref())
+        .map(|resp| resp.block);
+    let selected_creation_data = creation_data
+        .as_ref()
+        .ok()
+        .and_then(|data| data.responses.get(chain))
+        .and_then(|resp| resp.as_ref());
 
     // Assemble and return the response.
+    let creation_tx_hash = selected_creation_data.map(|x| x.tx_hash);
+    let creation_block_number = block_num.map(|x| x.as_number().unwrap().as_u64());
+    let creation_code = selected_creation_data.map(|x| x.creation_code.clone());
+
     let response = SuccessfulVerification {
         repo_url: repo_url.to_string(),
         repo_commit: commit_hash.to_string(),
         contract_address: contract_addr,
-        creation_code_match_type: contract_match.match_type,
-        chains: verified_contracts.keys().copied().collect(),
-        chain: Chain::Optimism, // TODO Un-hardcode this
+        matches: verified_contracts,
         sources,
-        creation_tx_hash: selected_creation_data.tx_hash,
-        creation_block_number: block_num.as_number().unwrap().as_u64(),
-        creation_code: selected_creation_data.creation_code.clone(),
-        runtime_code: contract_runtime_code(
-            provider.providers.get(&Chain::Optimism).unwrap(),
-            contract_addr,
-        )
-        .await,
-        creation_bytecode: artifact.bytecode.unwrap(),
+        creation_tx_hash,
+        creation_block_number,
+        creation_code,
+        runtime_code: deployed_code.responses.get(chain).unwrap().clone().unwrap(),
+        creation_bytecode: Some(artifact.bytecode.unwrap()),
         deployed_bytecode: artifact.deployed_bytecode.unwrap(),
         abi: artifact.abi.unwrap(),
         compiler_info,

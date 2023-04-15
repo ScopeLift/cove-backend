@@ -2,10 +2,12 @@ use ethers::{solc::artifacts::Offsets, types::Bytes};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+
 pub enum MatchType {
     Full,
     Partial,
+    #[default]
     None,
 }
 
@@ -31,12 +33,14 @@ pub struct ExpectedCreationBytecode {
     pub constructor_args: Option<Bytes>,
 }
 
+pub type ImmutableReferences = BTreeMap<String, Vec<Offsets>>;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct FoundDeployedBytecode {
     pub raw_code: Bytes,
     pub leading_code: Bytes,
     pub metadata: MetadataInfo,
-    pub immutable_references: BTreeMap<String, Vec<Offsets>>,
+    pub immutable_references: ImmutableReferences,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,7 +48,7 @@ pub struct ExpectedDeployedBytecode {
     pub raw_code: Bytes,
     pub leading_code: Bytes,
     pub metadata: MetadataInfo,
-    pub immutable_references: BTreeMap<String, Vec<Offsets>>,
+    pub immutable_references: ImmutableReferences,
 }
 
 pub fn creation_code_equality_check(

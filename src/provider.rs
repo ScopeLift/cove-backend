@@ -1,5 +1,5 @@
 use crate::{
-    bytecode::{creation_code_equality_check, MatchType},
+    bytecode::{creation_code_equality_check, deployed_code_equality_check, MatchType},
     frameworks::Framework,
 };
 use colored::Colorize;
@@ -16,7 +16,7 @@ pub struct ContractCreation {
     pub creation_code: Bytes,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct ContractMatch {
     pub artifact: PathBuf,
     pub match_type: MatchType,
@@ -76,7 +76,7 @@ pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Addr
 // ======== Multi-Chain ========
 // =============================
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ChainResponse<T> {
     pub responses: HashMap<Chain, Option<T>>,
 }
@@ -92,6 +92,7 @@ impl<T> ChainResponse<T> {
 }
 
 pub struct MultiChainProvider {
+    pub chains: Vec<Chain>,
     pub providers: HashMap<Chain, Arc<Provider<Http>>>,
 }
 
@@ -114,13 +115,13 @@ impl MultiChainProvider {
             .map(|chain| (*chain, provider_from_chain(*chain)))
             .collect::<HashMap<_, _>>();
 
-        Self { providers }
+        Self { chains, providers }
     }
 
     pub async fn get_creation_code(
         &self,
         address: Address,
-    ) -> Result<ChainResponse<ContractCreation>, Box<dyn Error>> {
+    ) -> Result<ChainResponse<ContractCreation>, Box<dyn Error + Send + Sync>> {
         async fn find_creation_code(
             provider: &Arc<Provider<Http>>,
             address: Address,
@@ -134,12 +135,30 @@ impl MultiChainProvider {
             (*chain, find_creation_code(provider, address).await)
         });
         let responses = future::join_all(futures).await.into_iter().collect::<HashMap<_, _>>();
+        Ok(ChainResponse { responses })
+    }
 
-        let response = ChainResponse { responses };
-        if response.is_all_none() {
-            return Err(format!("No creation code for {:?} found on any chain", address).into())
+    pub async fn get_deployed_code(
+        &self,
+        address: Address,
+    ) -> Result<ChainResponse<Bytes>, Box<dyn Error>> {
+        async fn find_deployed_code(
+            provider: &Arc<Provider<Http>>,
+            address: Address,
+        ) -> Option<Bytes> {
+            let code = provider.get_code(address, None).await.ok()?;
+            if code.is_empty() {
+                None
+            } else {
+                Some(code)
+            }
         }
-        Ok(response)
+
+        let futures = self.providers.iter().map(|(chain, provider)| async move {
+            (*chain, find_deployed_code(provider, address).await)
+        });
+        let responses = future::join_all(futures).await.into_iter().collect::<HashMap<_, _>>();
+        Ok(ChainResponse { responses })
     }
 
     pub fn compare_creation_code(
@@ -200,6 +219,70 @@ impl MultiChainProvider {
                 }
                 let expected_creation_code =
                     &expected_creation_data.as_ref().unwrap().creation_code;
+                (*chain, compare(project, expected_creation_code))
+            })
+            .collect::<HashMap<_, _>>();
+
+        ChainResponse { responses }
+    }
+
+    pub fn compare_deployed_code(
+        &self,
+        project: &impl Framework,
+        deployed_code: &ChainResponse<Bytes>,
+    ) -> ChainResponse<ContractMatch> {
+        fn compare(
+            project: &impl Framework,
+            expected_deployed_code: &Bytes,
+        ) -> Option<ContractMatch> {
+            let artifacts = project.get_artifacts().unwrap();
+            // TODO Better error handling here.
+            if artifacts.is_empty() {
+                panic!("No artifacts found in project");
+            }
+
+            let mut best_artifact_match: Option<ContractMatch> = None;
+            for artifact in artifacts {
+                let found = match project.structure_found_deployed_code(&artifact) {
+                    Ok(found) => found,
+                    Err(_) => continue,
+                };
+
+                let expected = match project.structure_expected_deployed_code(
+                    &artifact,
+                    &found,
+                    expected_deployed_code,
+                ) {
+                    Ok(expected) => expected,
+                    Err(_) => continue,
+                };
+
+                // If we have an exact match, return it. If we have a partial match, save it off.
+                // We'll return it if we don't find an exact match. Note that treats all partial
+                // matches equally and arbitrarily gives priority to the last one.
+                match deployed_code_equality_check(&found, &expected) {
+                    MatchType::Full => {
+                        return Some(ContractMatch { artifact, match_type: MatchType::Full })
+                    }
+                    MatchType::Partial => {
+                        best_artifact_match =
+                            Some(ContractMatch { artifact, match_type: MatchType::Partial })
+                    }
+                    _ => {}
+                }
+            }
+            best_artifact_match
+        }
+
+        let responses = self
+            .providers
+            .keys()
+            .map(|chain| {
+                let expected_deployed_code = deployed_code.responses.get(chain).unwrap();
+                if expected_deployed_code.is_none() {
+                    return (*chain, None)
+                }
+                let expected_creation_code = &expected_deployed_code.as_ref().unwrap();
                 (*chain, compare(project, expected_creation_code))
             })
             .collect::<HashMap<_, _>>();

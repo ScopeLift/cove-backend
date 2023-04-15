@@ -1,9 +1,13 @@
 /// Module for abstracting framework-specific logic.
 use crate::bytecode::{
-    parse_metadata, ExpectedCreationBytecode, FoundCreationBytecode, MetadataInfo,
+    parse_metadata, ExpectedCreationBytecode, ExpectedDeployedBytecode, FoundCreationBytecode,
+    FoundDeployedBytecode, ImmutableReferences, MetadataInfo,
 };
 use ethers::{
-    solc::artifacts::{BytecodeHash, LosslessAbi, SettingsMetadata},
+    solc::{
+        artifacts::{BytecodeHash, BytecodeObject, LosslessAbi, SettingsMetadata},
+        ConfigurableContractArtifact,
+    },
     types::Bytes,
 };
 use std::{
@@ -34,11 +38,23 @@ pub trait Framework {
         found: &FoundCreationBytecode,
         expected: &Bytes,
     ) -> Result<ExpectedCreationBytecode, Box<dyn Error>>;
+    fn structure_found_deployed_code(
+        &self,
+        artifact: &Path,
+    ) -> Result<FoundDeployedBytecode, Box<dyn Error>>;
+    fn structure_expected_deployed_code(
+        &self,
+        artifact: &Path,
+        found: &FoundDeployedBytecode,
+        expected: &Bytes,
+    ) -> Result<ExpectedDeployedBytecode, Box<dyn Error>>;
 
     // Artifact parsing.
     fn get_artifact_abi(artifact: &Path) -> Result<LosslessAbi, Box<dyn Error>>;
     fn get_artifact_creation_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>>;
-    fn get_artifact_deployed_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>>;
+    fn get_artifact_deployed_code(
+        artifact: &Path,
+    ) -> Result<(Bytes, ImmutableReferences), Box<dyn Error>>;
     fn get_artifact_metadata_settings(artifact: &Path) -> Result<SettingsMetadata, Box<dyn Error>>;
 }
 
@@ -230,6 +246,70 @@ impl Framework for Foundry {
         })
     }
 
+    fn structure_found_deployed_code(
+        &self,
+        artifact: &Path,
+    ) -> Result<FoundDeployedBytecode, Box<dyn Error>> {
+        let metadata_settings = Self::get_artifact_metadata_settings(artifact)?;
+        let (raw_code, immutable_references) = Self::get_artifact_deployed_code(artifact)?;
+        let bytecode_hash = metadata_settings.bytecode_hash.unwrap_or(BytecodeHash::None);
+        let append_cbor = metadata_settings.cbor_metadata.unwrap_or(false);
+
+        let (leading_code, metadata) = if bytecode_hash == BytecodeHash::None && !append_cbor {
+            // If `bytecodeHash = none` AND `appendCBOR = false`, there is no metadata, so
+            // everything we have is the leading code.
+            (raw_code.clone(), MetadataInfo::default())
+        } else {
+            // If bytecodeHash != none OR appendCBOR = true, some metadata hash is present,
+            // so we slice the bytes based on metadata length to get the leading code and metadata.
+            let metadata = parse_metadata(&raw_code);
+            let (leading_code, _) =
+                raw_code.split_at(metadata.start_index.unwrap_or(raw_code.len()));
+            (leading_code.to_vec().into(), metadata)
+        };
+
+        Ok(FoundDeployedBytecode { raw_code, leading_code, metadata, immutable_references })
+    }
+
+    fn structure_expected_deployed_code(
+        &self,
+        _artifact: &Path, // todo remove these unused args.
+        found: &FoundDeployedBytecode,
+        expected: &Bytes,
+    ) -> Result<ExpectedDeployedBytecode, Box<dyn Error>> {
+        if expected.len() < found.leading_code.len() {
+            return Err("Expected deployed bytecode is shorter than found deployed bytecode.".into())
+        }
+
+        // Leading code is everything up until the found's metadata hash start index.
+        let raw_code_len = found.raw_code.len();
+        let leading_code: Bytes =
+            expected.split_at(found.metadata.start_index.unwrap_or(raw_code_len)).0.to_vec().into();
+
+        // Metadata hash is given by the found's metadata hash start and end indices, if they are
+        // present, otherwise it's None.
+        let metadata_hash: Option<Bytes> = if let (Some(start_index), Some(end_index)) =
+            (found.metadata.start_index, found.metadata.end_index)
+        {
+            Some(expected[start_index..end_index].to_vec().into())
+        } else {
+            None
+        };
+
+        let metadata = MetadataInfo {
+            hash: metadata_hash,
+            start_index: found.metadata.start_index,
+            end_index: found.metadata.end_index,
+        };
+
+        Ok(ExpectedDeployedBytecode {
+            raw_code: expected.clone(),
+            leading_code,
+            metadata,
+            immutable_references: found.immutable_references.clone(),
+        })
+    }
+
     fn get_artifact_abi(artifact: &Path) -> Result<LosslessAbi, Box<dyn Error>> {
         let file_content = fs::read_to_string(artifact)?;
         let json_content: serde_json::Value = serde_json::from_str(&file_content)?;
@@ -255,20 +335,22 @@ impl Framework for Foundry {
         Ok(creation_code)
     }
 
-    fn get_artifact_deployed_code(artifact: &Path) -> Result<Bytes, Box<dyn Error>> {
+    fn get_artifact_deployed_code(
+        artifact: &Path,
+    ) -> Result<(Bytes, ImmutableReferences), Box<dyn Error>> {
         let file_content = fs::read_to_string(artifact)?;
-        let json_content: serde_json::Value = serde_json::from_str(&file_content)?;
-        let creation_code_value = json_content
-            .get("deployedBytecode")
-            .ok_or_else(|| {
-                format!("Missing 'bytecode' field in artifact JSON: {}", artifact.display())
-            })?
-            .get("object")
-            .ok_or_else(|| {
-                format!("Missing 'object' field in bytecode JSON: {}", artifact.display())
-            })?;
-        let creation_code: Bytes = serde_json::from_value(creation_code_value.clone())?;
-        Ok(creation_code)
+        let artifact: ConfigurableContractArtifact = serde_json::from_str(&file_content)?;
+
+        let deployed_code_object = artifact.deployed_bytecode.ok_or("No deployedBytecode found")?;
+        let deployed_code =
+            match deployed_code_object.bytecode.ok_or("No bytecode object found")?.object {
+                BytecodeObject::Bytecode(bytes) => bytes,
+                BytecodeObject::Unlinked(_) => {
+                    return Err("Linked libraries not yet supported".into())
+                }
+            };
+        let immutable_references = deployed_code_object.immutable_references;
+        Ok((deployed_code, immutable_references))
     }
 
     fn get_artifact_metadata_settings(artifact: &Path) -> Result<SettingsMetadata, Box<dyn Error>> {
@@ -598,7 +680,7 @@ mod tests {
         for test_case in test_cases {
             let artifact = NamedTempFile::new()?;
             let path = create_test_artifact(&artifact, &test_case.content)?;
-            let creation_code = Foundry::get_artifact_deployed_code(&path)?;
+            let (creation_code, _) = Foundry::get_artifact_deployed_code(&path)?;
             assert_eq!(creation_code, test_case.expected);
         }
 
