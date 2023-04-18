@@ -1,15 +1,25 @@
+use crate::{
+    bytecode::{creation_code_equality_check, deployed_code_equality_check, MatchType},
+    frameworks::Framework,
+};
 use colored::Colorize;
 use ethers::{
     providers::{Http, Middleware, Provider},
     types::{Address, BlockId, BlockNumber, Bytes, Chain, TxHash, U256},
 };
 use futures::future;
-use std::{collections::HashMap, env, error::Error, fs, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, env, error::Error, path::PathBuf, str::FromStr, sync::Arc};
 
 pub struct ContractCreation {
     pub tx_hash: TxHash,
     pub block: BlockNumber,
     pub creation_code: Bytes,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ContractMatch {
+    pub artifact: PathBuf,
+    pub match_type: MatchType,
 }
 
 fn print_color_by_chain(text: String, chain: Chain) {
@@ -66,7 +76,7 @@ pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Addr
 // ======== Multi-Chain ========
 // =============================
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ChainResponse<T> {
     pub responses: HashMap<Chain, Option<T>>,
 }
@@ -82,6 +92,7 @@ impl<T> ChainResponse<T> {
 }
 
 pub struct MultiChainProvider {
+    pub chains: Vec<Chain>,
     pub providers: HashMap<Chain, Arc<Provider<Http>>>,
 }
 
@@ -104,13 +115,13 @@ impl MultiChainProvider {
             .map(|chain| (*chain, provider_from_chain(*chain)))
             .collect::<HashMap<_, _>>();
 
-        Self { providers }
+        Self { chains, providers }
     }
 
     pub async fn get_creation_code(
         &self,
         address: Address,
-    ) -> Result<ChainResponse<ContractCreation>, Box<dyn Error>> {
+    ) -> Result<ChainResponse<ContractCreation>, Box<dyn Error + Send + Sync>> {
         async fn find_creation_code(
             provider: &Arc<Provider<Http>>,
             address: Address,
@@ -124,66 +135,155 @@ impl MultiChainProvider {
             (*chain, find_creation_code(provider, address).await)
         });
         let responses = future::join_all(futures).await.into_iter().collect::<HashMap<_, _>>();
+        Ok(ChainResponse { responses })
+    }
 
-        let response = ChainResponse { responses };
-        if response.is_all_none() {
-            return Err(format!("No creation code for {:?} found on any chain", address).into())
+    pub async fn get_deployed_code(
+        &self,
+        address: Address,
+    ) -> Result<ChainResponse<Bytes>, Box<dyn Error>> {
+        async fn find_deployed_code(
+            provider: &Arc<Provider<Http>>,
+            address: Address,
+        ) -> Option<Bytes> {
+            let code = provider.get_code(address, None).await.ok()?;
+            if code.is_empty() {
+                None
+            } else {
+                Some(code)
+            }
         }
-        Ok(response)
+
+        let futures = self.providers.iter().map(|(chain, provider)| async move {
+            (*chain, find_deployed_code(provider, address).await)
+        });
+        let responses = future::join_all(futures).await.into_iter().collect::<HashMap<_, _>>();
+        Ok(ChainResponse { responses })
     }
 
     pub fn compare_creation_code(
         &self,
-        artifacts: Vec<PathBuf>,
+        project: &impl Framework,
         creation_data: &ChainResponse<ContractCreation>,
-    ) -> ChainResponse<PathBuf> {
+    ) -> ChainResponse<ContractMatch> {
         fn compare(
-            artifacts: Vec<PathBuf>,
-            expected_creation_data: &ContractCreation,
-        ) -> Option<PathBuf> {
+            project: &impl Framework,
+            expected_creation_code: &Bytes,
+        ) -> Option<ContractMatch> {
+            let artifacts = project.get_artifacts().unwrap();
+            // TODO Better error handling here.
+            if artifacts.is_empty() {
+                panic!("No artifacts found in project");
+            }
+
+            let mut best_artifact_match: Option<ContractMatch> = None;
             for artifact in artifacts {
-                let content = fs::read_to_string(&artifact).unwrap();
-                let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-                if let Some(bytecode_value) = json.get("bytecode").unwrap().get("object") {
-                    if let Some(bytecode_str) = bytecode_value.as_str() {
-                        let bytecode = Bytes::from_str(bytecode_str).unwrap();
+                let found = match project.structure_found_creation_code(&artifact) {
+                    Ok(found) => found,
+                    Err(_) => continue,
+                };
 
-                        // First just try a simple equality check.
-                        if bytecode == expected_creation_data.creation_code {
-                            return Some(artifact)
-                        }
+                let expected = match project.structure_expected_creation_code(
+                    &artifact,
+                    &found,
+                    expected_creation_code,
+                ) {
+                    Ok(expected) => expected,
+                    Err(_) => continue,
+                };
 
-                        // Let's try accounting for constructor arguments now. We do this by
-                        // defining equality as:
-                        //   - The expected creation code is longer than the artifact creation code.
-                        //   - The expected creation code and found creation code match up to byte
-                        //     `n`, where `n` is the length of the found bytecode.
-                        let equal_len = expected_creation_data.creation_code.len() > bytecode.len();
-                        let bytes_match = bytecode
-                            .iter()
-                            .zip(expected_creation_data.creation_code.iter())
-                            .all(|(a_byte, b_byte)| a_byte == b_byte);
-
-                        if equal_len && bytes_match {
-                            return Some(artifact)
-                        }
+                // If we have an exact match, return it. If we have a partial match, save it off.
+                // We'll return it if we don't find an exact match. Note that treats all partial
+                // matches equally and arbitrarily gives priority to the last one.
+                match creation_code_equality_check(&found, &expected) {
+                    MatchType::Full => {
+                        return Some(ContractMatch { artifact, match_type: MatchType::Full })
                     }
+                    MatchType::Partial => {
+                        best_artifact_match =
+                            Some(ContractMatch { artifact, match_type: MatchType::Partial })
+                    }
+                    _ => {}
                 }
             }
-            None
+            best_artifact_match
         }
 
         let responses = self
             .providers
             .keys()
             .map(|chain| {
-                let artifacts = artifacts.clone();
                 let expected_creation_data = creation_data.responses.get(chain).unwrap();
                 if expected_creation_data.is_none() {
                     return (*chain, None)
                 }
-                let expected_creation_data = expected_creation_data.as_ref().unwrap();
-                (*chain, compare(artifacts, expected_creation_data))
+                let expected_creation_code =
+                    &expected_creation_data.as_ref().unwrap().creation_code;
+                (*chain, compare(project, expected_creation_code))
+            })
+            .collect::<HashMap<_, _>>();
+
+        ChainResponse { responses }
+    }
+
+    pub fn compare_deployed_code(
+        &self,
+        project: &impl Framework,
+        deployed_code: &ChainResponse<Bytes>,
+    ) -> ChainResponse<ContractMatch> {
+        fn compare(
+            project: &impl Framework,
+            expected_deployed_code: &Bytes,
+        ) -> Option<ContractMatch> {
+            let artifacts = project.get_artifacts().unwrap();
+            // TODO Better error handling here.
+            if artifacts.is_empty() {
+                panic!("No artifacts found in project");
+            }
+
+            let mut best_artifact_match: Option<ContractMatch> = None;
+            for artifact in artifacts {
+                let found = match project.structure_found_deployed_code(&artifact) {
+                    Ok(found) => found,
+                    Err(_) => continue,
+                };
+
+                let expected = match project.structure_expected_deployed_code(
+                    &artifact,
+                    &found,
+                    expected_deployed_code,
+                ) {
+                    Ok(expected) => expected,
+                    Err(_) => continue,
+                };
+
+                // If we have an exact match, return it. If we have a partial match, save it off.
+                // We'll return it if we don't find an exact match. Note that treats all partial
+                // matches equally and arbitrarily gives priority to the last one.
+                match deployed_code_equality_check(&found, &expected) {
+                    MatchType::Full => {
+                        return Some(ContractMatch { artifact, match_type: MatchType::Full })
+                    }
+                    MatchType::Partial => {
+                        best_artifact_match =
+                            Some(ContractMatch { artifact, match_type: MatchType::Partial })
+                    }
+                    _ => {}
+                }
+            }
+            best_artifact_match
+        }
+
+        let responses = self
+            .providers
+            .keys()
+            .map(|chain| {
+                let expected_deployed_code = deployed_code.responses.get(chain).unwrap();
+                if expected_deployed_code.is_none() {
+                    return (*chain, None)
+                }
+                let expected_creation_code = &expected_deployed_code.as_ref().unwrap();
+                (*chain, compare(project, expected_creation_code))
             })
             .collect::<HashMap<_, _>>();
 
