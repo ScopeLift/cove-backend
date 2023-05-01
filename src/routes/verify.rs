@@ -35,38 +35,38 @@ pub struct VerifyData {
     contract_address: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CompilerInfo {
     compiler: String, // Includes version.
     language: String,
     settings: MetadataSettings,
 }
 
-#[derive(Serialize)]
-struct SuccessfulVerification {
-    repo_url: String,
-    repo_commit: String,
-    contract_address: Address,
-    matches: HashMap<Chain, VerificationMatch>,
-    creation_tx_hash: Option<TxHash>,
-    creation_block_number: Option<u64>,
-    creation_code: Option<Bytes>,
-    sources: Vec<SourceFile>,
-    runtime_code: Bytes,
-    creation_bytecode: Option<CompactBytecode>,
-    deployed_bytecode: CompactDeployedBytecode,
-    abi: LosslessAbi,
-    compiler_info: CompilerInfo,
-    ast: Ast,
+#[derive(Serialize, Deserialize)]
+pub struct SuccessfulVerification {
+    pub repo_url: String,
+    pub repo_commit: String,
+    pub contract_address: Address,
+    pub matches: HashMap<Chain, VerificationMatch>,
+    pub creation_tx_hash: Option<TxHash>,
+    pub creation_block_number: Option<u64>,
+    pub creation_code: Option<Bytes>,
+    pub sources: Vec<SourceFile>,
+    pub runtime_code: Bytes,
+    pub creation_bytecode: Option<CompactBytecode>,
+    pub deployed_bytecode: CompactDeployedBytecode,
+    pub abi: LosslessAbi,
+    pub compiler_info: CompilerInfo,
+    pub ast: Ast,
 }
 
-#[derive(Serialize)]
-struct SourceFile {
+#[derive(Serialize, Deserialize)]
+pub struct SourceFile {
     path: PathBuf,
     content: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct VerificationMatch {
     artifact: PathBuf,
     creation_code_match_type: MatchType,

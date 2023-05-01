@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn structure_found_creation_code() -> Result<(), Box<dyn Error>> {
+    fn test_structure_found_creation_code() -> Result<(), Box<dyn Error>> {
         struct TestCase {
             content: serde_json::Value,
             expected: FoundCreationBytecode,
@@ -440,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn structure_expected_creation_code() -> Result<(), Box<dyn Error>> {
+    fn test_structure_expected_creation_code() -> Result<(), Box<dyn Error>> {
         let foundry = Foundry { path: PathBuf::new() };
 
         // First test the case where expected code is too short to structure.
@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn get_artifact_abi() -> Result<(), Box<dyn Error>> {
+    fn test_get_artifact_abi() -> Result<(), Box<dyn Error>> {
         struct TestCase {
             content: serde_json::Value,
             expected_num_methods: usize,
@@ -628,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn get_artifact_creation_code() -> Result<(), Box<dyn Error>> {
+    fn test_get_artifact_creation_code() -> Result<(), Box<dyn Error>> {
         struct TestCase {
             content: serde_json::Value,
             expected: Bytes,
