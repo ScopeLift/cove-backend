@@ -140,8 +140,7 @@ impl Framework for Foundry {
                     .arg("--build-info")
                     .arg("--build-info-path")
                     .arg("build_info")
-                    .env("FOUNDRY_PROFILE", profile_name)
-                    .env("FOUNDRY_BYTECODE_HASH", "none"); // TODO Account for bytecode hash later.
+                    .env("FOUNDRY_PROFILE", profile_name);
                 command
             })
             .collect::<Vec<Command>>();

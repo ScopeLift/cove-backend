@@ -33,6 +33,7 @@ pub struct VerifyData {
     repo_url: String,
     repo_commit: String,
     contract_address: String,
+    creation_tx_hashes: Option<HashMap<Chain, TxHash>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -123,9 +124,8 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
         let msg = format!("No deployed code found for contract {:?}", contract_addr);
         return Err(VerifyError::BadRequest(msg))
     }
-    println!("  Found deployed code on the following chains: {:?}", deployed_code.responses.keys());
 
-    let creation_data = provider.get_creation_code(contract_addr).await;
+    let creation_data = provider.get_creation_code(contract_addr, json.creation_tx_hashes).await;
 
     // Create a temporary directory for the cloned repository.
     println!("\nCLONING REPOSITORY");

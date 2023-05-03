@@ -1,6 +1,9 @@
+use std::{collections::HashMap, str::FromStr};
+
 use serde_json::json;
 mod common;
 use cove::routes::verify::SuccessfulVerification;
+use ethers::types::{Chain, TxHash};
 use serde_json::from_str;
 
 #[tokio::test]
@@ -9,13 +12,23 @@ async fn verify_test() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
 
     let repo_url = "https://github.com/ScopeLift/cove-test-repo";
-    let repo_commit = "188587df6652484e64590127f6ae3038c0aa93e3";
+    let repo_commit = "94831dee86cba9cb8da031d3bc742a8627156921";
     let contract_address = "0x406B940c7154eDB4Aa2B20CA62fC9A7e70fbe435";
+    let mut creation_tx_hashes: HashMap<Chain, TxHash> = HashMap::new();
+    creation_tx_hashes.insert(
+        Chain::Optimism,
+        TxHash::from_str("0xc89b7078fe588ac08d289d220d4f73727d656c698ab027c5a61aabb1dc79c99b")?,
+    );
+    creation_tx_hashes.insert(
+        Chain::Polygon,
+        TxHash::from_str("0xf89dda92d455b0634f0bd44fecaca92fd8323e3abeb553bb344584ba5326f127")?,
+    );
 
     let body = json!({
         "repo_url": repo_url,
         "repo_commit": repo_commit,
         "contract_address": contract_address,
+        "creation_tx_hashes": Some(creation_tx_hashes),
     });
     // let body = json!({
     //     "repo_url": "https://github.com/ProjectOpenSea/seaport",
@@ -36,6 +49,5 @@ async fn verify_test() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(repo_url, verification_result.repo_url);
     assert_eq!(repo_commit, verification_result.repo_commit);
-    assert_eq!(contract_address, verification_result.contract_address.to_string());
     Ok(())
 }

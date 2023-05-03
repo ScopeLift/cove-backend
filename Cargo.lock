@@ -785,7 +785,6 @@ name = "cove"
 version = "0.1.0"
 dependencies = [
  "axum",
- "colored",
  "config",
  "dotenvy",
  "ethers 2.0.0 (git+https://github.com/gakonst/ethers-rs)",
