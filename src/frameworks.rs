@@ -24,7 +24,7 @@ pub trait Framework {
     where
         Self: Sized;
     fn is_supported(path: &Path) -> bool;
-    fn build_commands(&self) -> Result<Vec<Command>, Box<dyn Error>>;
+    fn build_commands(&self, hint: Option<String>) -> Result<Vec<Command>, Box<dyn Error>>;
     fn get_artifacts(&self) -> Result<Vec<PathBuf>, Box<dyn Error>>;
 
     // Bytecode structuring.
@@ -123,11 +123,25 @@ impl Framework for Foundry {
 
     // TODO We currently only support forge projects and assume the user is using the default forge
     // directory structure of `src/`, `lib/`, and `out/`.
-    fn build_commands(&self) -> Result<Vec<Command>, Box<dyn Error>> {
+    fn build_commands(&self, hint: Option<String>) -> Result<Vec<Command>, Box<dyn Error>> {
+        // For forge projects, the hint is expected to be the profile name.
+        let maybe_profile_name = hint;
+
         let config_file = self.path.join("foundry.toml");
-        let profile_names = Self::foundry_profiles(&config_file)?;
+        let mut profile_names = Self::foundry_profiles(&config_file)?;
         println!("  Found profiles: {:?}", profile_names);
 
+        // If we are given a profile name, only build that profile, otherwise build all profiles.
+        if let Some(profile_name) = maybe_profile_name {
+            if !profile_names.contains(&profile_name) {
+                return Err(format!("Profile '{}' not found in foundry.toml.", profile_name).into())
+            }
+            profile_names = vec![profile_name];
+        } else {
+            return Err("Currently a profile name must be provided for forge projects.".into())
+        }
+
+        // Generate the build commands.
         let commands = profile_names
             .into_iter()
             .map(|profile_name| {

@@ -28,11 +28,31 @@ use std::{
 };
 use tempfile::TempDir;
 
+#[derive(Deserialize, Debug)]
+pub enum BuildFramework {
+    #[serde(rename = "foundry")]
+    Foundry,
+    #[serde(rename = "hardhat")]
+    Hardhat,
+    #[serde(rename = "ape")]
+    Ape,
+    #[serde(rename = "truffle")]
+    Truffle,
+}
+
+#[derive(Deserialize)]
+pub struct BuildConfig {
+    framework: BuildFramework,
+    // For forge, this is the profile name.
+    build_hint: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct VerifyData {
     repo_url: String,
     repo_commit: String,
     contract_address: String,
+    build_config: BuildConfig,
     creation_tx_hashes: Option<HashMap<Chain, TxHash>>,
 }
 
@@ -140,15 +160,20 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
         .map_err(|e| VerifyError::BadRequest(format!("Could not clone repo: {}", e)))?;
 
     // Determine the framework used by the project. For now we only support Foundry.
-    let project = Foundry::new(project_path)
-        .map_err(|e| VerifyError::BadRequest(format!("Only supports forge projects: {}", e)))?;
+    let project = match json.build_config.framework {
+        BuildFramework::Foundry => Foundry::new(project_path).unwrap(),
+        _ => {
+            let msg = format!("Unsupported framework: {:?}", json.build_config.framework);
+            return Err(VerifyError::BadRequest(msg))
+        }
+    };
 
     // Get the build commands for the project.
     println!("\nBUILDING CONTRACTS AND COMPARING BYTECODE");
     std::env::set_current_dir(project_path).map_err(|e| {
         VerifyError::InternalServerError(format!("Could not set current directory: {}", e))
     })?;
-    let build_commands = project.build_commands().map_err(|e| {
+    let build_commands = project.build_commands(json.build_config.build_hint).map_err(|e| {
         VerifyError::InternalServerError(format!("Could not find build commands: {}", e))
     })?;
     let mut verified_contracts: HashMap<Chain, VerificationMatch> = HashMap::new();
