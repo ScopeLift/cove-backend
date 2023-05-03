@@ -160,7 +160,6 @@ impl MultiChainProvider {
             expected_creation_code: &Bytes,
         ) -> Option<ContractMatch> {
             let artifacts = project.get_artifacts().unwrap();
-            // TODO Better error handling here.
             if artifacts.is_empty() {
                 panic!("No artifacts found in project");
             }
@@ -226,7 +225,6 @@ impl MultiChainProvider {
             expected_deployed_code: &Bytes,
         ) -> Option<ContractMatch> {
             let artifacts = project.get_artifacts().unwrap();
-            // TODO Better error handling here.
             if artifacts.is_empty() {
                 panic!("No artifacts found in project");
             }
@@ -238,11 +236,9 @@ impl MultiChainProvider {
                     Err(_) => continue,
                 };
 
-                let expected = match project.structure_expected_deployed_code(
-                    &artifact,
-                    &found,
-                    expected_deployed_code,
-                ) {
+                let expected = match project
+                    .structure_expected_deployed_code(&found, expected_deployed_code)
+                {
                     Ok(expected) => expected,
                     Err(_) => continue,
                 };
@@ -334,8 +330,8 @@ async fn creation_code_from_tx_hash(
             //   - Bytes 37-68: Offset to creation code data
             //   - Bytes 69-100: Offset to creation code length
             let len = &tx.input[69..100];
-            let len = U256::from(len).as_usize() + 100; // TODO Why, without this, is the code 100 bytes short?
-            let creation_code = &tx.input[100..len];
+            let len = U256::from(len).as_usize();
+            let creation_code = &tx.input[100..len + 100];
             let creation_code = Bytes::from_iter(creation_code);
             return Ok((creation_code, tx))
         }

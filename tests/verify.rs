@@ -4,7 +4,7 @@ use cove::routes::verify::SuccessfulVerification;
 use serde_json::from_str;
 
 #[tokio::test]
-async fn verify_test_counter() -> Result<(), Box<dyn std::error::Error>> {
+async fn verify_counter() -> Result<(), Box<dyn std::error::Error>> {
     let app = common::spawn_app().await;
     let client = reqwest::Client::new();
 
@@ -49,7 +49,7 @@ async fn verify_test_counter() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn verify_test_seaport() -> Result<(), Box<dyn std::error::Error>> {
+async fn verify_seaport() -> Result<(), Box<dyn std::error::Error>> {
     let app = common::spawn_app().await;
     let client = reqwest::Client::new();
 

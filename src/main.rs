@@ -3,7 +3,6 @@ use std::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> hyper::Result<()> {
-    // TODO Logs are just to stdout right now, we should save them off.
     let subscriber = telemetry::get_subscriber("cove".into(), "info".into(), std::io::stdout);
     telemetry::init_subscriber(subscriber);
 

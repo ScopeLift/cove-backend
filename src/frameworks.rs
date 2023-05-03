@@ -44,7 +44,6 @@ pub trait Framework {
     ) -> Result<FoundDeployedBytecode, Box<dyn Error>>;
     fn structure_expected_deployed_code(
         &self,
-        artifact: &Path,
         found: &FoundDeployedBytecode,
         expected: &Bytes,
     ) -> Result<ExpectedDeployedBytecode, Box<dyn Error>>;
@@ -121,8 +120,6 @@ impl Framework for Foundry {
         file.exists() && file.is_file()
     }
 
-    // TODO We currently only support forge projects and assume the user is using the default forge
-    // directory structure of `src/`, `lib/`, and `out/`.
     fn build_commands(&self, hint: Option<String>) -> Result<Vec<Command>, Box<dyn Error>> {
         // For forge projects, the hint is expected to be the profile name.
         let maybe_profile_name = hint;
@@ -286,7 +283,6 @@ impl Framework for Foundry {
 
     fn structure_expected_deployed_code(
         &self,
-        _artifact: &Path, // todo remove these unused args.
         found: &FoundDeployedBytecode,
         expected: &Bytes,
     ) -> Result<ExpectedDeployedBytecode, Box<dyn Error>> {
