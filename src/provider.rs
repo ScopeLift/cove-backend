@@ -94,10 +94,7 @@ impl Default for MultiChainProvider {
 impl MultiChainProvider {
     pub fn new() -> Self {
         let chains =
-            // Gnosis Chain fails to binary search with: `No state available for block 13600864`. Need to
-            // get access an archive node to get the binary search working.
-            // vec![Chain::XDai, Chain::Goerli, Chain::Mainnet, Chain::Optimism, Chain::Polygon];
-            vec![Chain::Goerli, Chain::Mainnet, Chain::Optimism, Chain::Polygon];
+            vec![Chain::XDai, Chain::Goerli, Chain::Mainnet, Chain::Optimism, Chain::Polygon];
 
         let providers = chains
             .iter()
