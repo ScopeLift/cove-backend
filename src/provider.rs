@@ -27,9 +27,6 @@ pub struct ContractMatch {
 
 pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     match chain {
-        Chain::XDai => {
-            Arc::new(Provider::<Http>::try_from(env::var("GNOSIS_CHAIN_RPC_URL").unwrap()).unwrap())
-        }
         Chain::Goerli => {
             Arc::new(Provider::<Http>::try_from(env::var("GOERLI_RPC_URL").unwrap()).unwrap())
         }
@@ -41,6 +38,12 @@ pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
         }
         Chain::Polygon => {
             Arc::new(Provider::<Http>::try_from(env::var("POLYGON_RPC_URL").unwrap()).unwrap())
+        }
+        Chain::Sepolia => {
+            Arc::new(Provider::<Http>::try_from(env::var("SEPOLIA_RPC_URL").unwrap()).unwrap())
+        }
+        Chain::XDai => {
+            Arc::new(Provider::<Http>::try_from(env::var("GNOSIS_CHAIN_RPC_URL").unwrap()).unwrap())
         }
         _ => panic!("Unsupported chain"),
     }
