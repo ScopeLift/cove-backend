@@ -414,25 +414,30 @@ async fn clone_repo_and_checkout_commit(
     temp_dir: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("  Cloning repository into a temporary directory.");
-    let status =
-        Command::new("git").arg("clone").arg(repo_url).arg(temp_dir).arg("--quiet").status()?;
+
+    let status = Command::new("git")
+        .arg("clone")
+        .arg(repo_url)
+        .arg(".") // Clone directly into the `temp_dir` instead of creating a subdirectory.
+        .arg("--quiet")
+        .current_dir(temp_dir)
+        .status()?;
 
     if !status.success() {
         return Err(format!("Failed to clone the repository. Exit status: {}", status).into())
     }
 
-    let cwd = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir)?;
-
     println!("  Checking out the given commit.");
-    let status = Command::new("git").arg("checkout").arg(commit_hash).arg("--quiet").status()?;
+    let status = Command::new("git")
+        .arg("checkout")
+        .arg(commit_hash)
+        .arg("--quiet")
+        .current_dir(temp_dir)
+        .status()?;
 
     if !status.success() {
         return Err(format!("Failed to checkout the commit. Exit status: {}", status).into())
     }
-
-    std::env::set_current_dir(cwd)?;
     println!("  Done.");
-
     Ok(())
 }
