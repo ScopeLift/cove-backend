@@ -27,20 +27,25 @@ pub struct ContractMatch {
 
 pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     match chain {
-        Chain::Goerli => {
-            Arc::new(Provider::<Http>::try_from(env::var("GOERLI_RPC_URL").unwrap()).unwrap())
-        }
+        // Mainnet + Testnets.
         Chain::Mainnet => {
             Arc::new(Provider::<Http>::try_from(env::var("MAINNET_RPC_URL").unwrap()).unwrap())
         }
-        Chain::Optimism => {
-            Arc::new(Provider::<Http>::try_from(env::var("OPTIMISM_RPC_URL").unwrap()).unwrap())
-        }
-        Chain::Polygon => {
-            Arc::new(Provider::<Http>::try_from(env::var("POLYGON_RPC_URL").unwrap()).unwrap())
+        Chain::Goerli => {
+            Arc::new(Provider::<Http>::try_from(env::var("GOERLI_RPC_URL").unwrap()).unwrap())
         }
         Chain::Sepolia => {
             Arc::new(Provider::<Http>::try_from(env::var("SEPOLIA_RPC_URL").unwrap()).unwrap())
+        }
+        // Other chains.
+        Chain::Optimism => {
+            Arc::new(Provider::<Http>::try_from(env::var("OPTIMISM_RPC_URL").unwrap()).unwrap())
+        }
+        Chain::Arbitrum => {
+            Arc::new(Provider::<Http>::try_from(env::var("ARBITRUM_ONE_RPC_URL").unwrap()).unwrap())
+        }
+        Chain::Polygon => {
+            Arc::new(Provider::<Http>::try_from(env::var("POLYGON_RPC_URL").unwrap()).unwrap())
         }
         Chain::XDai => {
             Arc::new(Provider::<Http>::try_from(env::var("GNOSIS_CHAIN_RPC_URL").unwrap()).unwrap())
@@ -51,11 +56,15 @@ pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
 
 pub fn provider_url_from_chain(chain: Chain) -> String {
     match chain {
-        Chain::XDai => env::var("GNOSIS_CHAIN_RPC_URL").unwrap(),
-        Chain::Goerli => env::var("GOERLI_RPC_URL").unwrap(),
+        // Mainnet + Testnets.
         Chain::Mainnet => env::var("MAINNET_RPC_URL").unwrap(),
+        Chain::Goerli => env::var("GOERLI_RPC_URL").unwrap(),
+        Chain::Sepolia => env::var("SEPOLIA_RPC_URL").unwrap(),
+        // Other chains.
         Chain::Optimism => env::var("OPTIMISM_RPC_URL").unwrap(),
+        Chain::Arbitrum => env::var("ARBITRUM_ONE_RPC_URL").unwrap(),
         Chain::Polygon => env::var("POLYGON_RPC_URL").unwrap(),
+        Chain::XDai => env::var("GNOSIS_CHAIN_RPC_URL").unwrap(),
         _ => panic!("Unsupported chain"),
     }
 }
