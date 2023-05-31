@@ -319,7 +319,9 @@ async fn creation_code_from_tx_hash(
     if let Some(factory) = tx.to {
         // https://github.com/Arachnid/deterministic-deployment-proxy
         if factory == Address::from_str("0x4e59b44847b379578588920cA78FbF26c0B4956C")? {
-            todo!();
+            // The first 32 bytes of calldata are the salt, and the rest are the creation code.
+            let creation_code = Bytes::from_iter(tx.input[32..].to_vec());
+            return Ok((creation_code, tx))
         }
 
         // Create2 factory by 0age.
