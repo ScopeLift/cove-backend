@@ -360,7 +360,10 @@ mod tests {
     use futures::future::try_join_all;
 
     fn get_provider() -> Arc<Provider<Http>> {
-        dotenv().expect(".env file not found");
+        if dotenv().is_err() {
+            // We don't error since there's no `.env` file in CI.
+            println!("WARNING: No .env file found, using default environment variables.");
+        }
         Arc::new(Provider::<Http>::try_from(env::var("GOERLI_RPC_URL").unwrap()).unwrap())
     }
 

@@ -16,7 +16,10 @@ use tower_http::{
 };
 
 pub fn run(listener: TcpListener) -> hyper::Result<Server<AddrIncoming, IntoMakeService<Router>>> {
-    dotenv().expect(".env file not found");
+    if dotenv().is_err() {
+        // We don't error since there's no `.env` file in CI.
+        println!("WARNING: No .env file found, using default environment variables.");
+    }
 
     // Configure service to have request IDs show up correctly in logs produced by
     // `tower_http::trace::Trace`. Modified from: https://docs.rs/tower-http/latest/tower_http/request_id/index.html#using-trace
