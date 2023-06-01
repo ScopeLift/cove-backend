@@ -28,45 +28,66 @@ use std::{
 };
 use tempfile::TempDir;
 
+#[derive(Deserialize, Debug)]
+pub enum BuildFramework {
+    #[serde(rename = "foundry")]
+    Foundry,
+    #[serde(rename = "hardhat")]
+    Hardhat,
+    #[serde(rename = "ape")]
+    Ape,
+    #[serde(rename = "truffle")]
+    Truffle,
+}
+
+#[derive(Deserialize)]
+pub struct BuildConfig {
+    framework: BuildFramework,
+    // For forge, this is the profile name.
+    build_hint: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct VerifyData {
     repo_url: String,
     repo_commit: String,
     contract_address: String,
+    build_config: BuildConfig,
+    creation_tx_hashes: Option<HashMap<Chain, TxHash>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CompilerInfo {
     compiler: String, // Includes version.
     language: String,
     settings: MetadataSettings,
 }
 
-#[derive(Serialize)]
-struct SuccessfulVerification {
-    repo_url: String,
-    repo_commit: String,
-    contract_address: Address,
-    matches: HashMap<Chain, VerificationMatch>,
-    creation_tx_hash: Option<TxHash>,
-    creation_block_number: Option<u64>,
-    creation_code: Option<Bytes>,
-    sources: Vec<SourceFile>,
-    runtime_code: Bytes,
-    creation_bytecode: Option<CompactBytecode>,
-    deployed_bytecode: CompactDeployedBytecode,
-    abi: LosslessAbi,
-    compiler_info: CompilerInfo,
-    ast: Ast,
+#[derive(Serialize, Deserialize)]
+pub struct SuccessfulVerification {
+    pub repo_url: String,
+    pub repo_commit: String,
+    pub contract_address: Address,
+    pub matches: HashMap<Chain, VerificationMatch>,
+    pub creation_tx_hash: Option<TxHash>,
+    pub creation_block_number: Option<u64>,
+    pub creation_code: Option<Bytes>,
+    pub sources: Vec<SourceFile>,
+    pub runtime_code: Bytes,
+    pub creation_bytecode: Option<CompactBytecode>,
+    pub deployed_bytecode: CompactDeployedBytecode,
+    pub abi: LosslessAbi,
+    pub compiler_info: CompilerInfo,
+    pub ast: Ast,
 }
 
-#[derive(Serialize)]
-struct SourceFile {
+#[derive(Serialize, Deserialize)]
+pub struct SourceFile {
     path: PathBuf,
     content: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct VerificationMatch {
     artifact: PathBuf,
     creation_code_match_type: MatchType,
@@ -123,9 +144,8 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
         let msg = format!("No deployed code found for contract {:?}", contract_addr);
         return Err(VerifyError::BadRequest(msg))
     }
-    println!("  Found deployed code on the following chains: {:?}", deployed_code.responses.keys());
 
-    let creation_data = provider.get_creation_code(contract_addr).await;
+    let creation_data = provider.get_creation_code(contract_addr, json.creation_tx_hashes).await;
 
     // Create a temporary directory for the cloned repository.
     println!("\nCLONING REPOSITORY");
@@ -140,15 +160,20 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
         .map_err(|e| VerifyError::BadRequest(format!("Could not clone repo: {}", e)))?;
 
     // Determine the framework used by the project. For now we only support Foundry.
-    let project = Foundry::new(project_path)
-        .map_err(|e| VerifyError::BadRequest(format!("Only supports forge projects: {}", e)))?;
+    let project = match json.build_config.framework {
+        BuildFramework::Foundry => Foundry::new(project_path).unwrap(),
+        _ => {
+            let msg = format!("Unsupported framework: {:?}", json.build_config.framework);
+            return Err(VerifyError::BadRequest(msg))
+        }
+    };
 
     // Get the build commands for the project.
     println!("\nBUILDING CONTRACTS AND COMPARING BYTECODE");
     std::env::set_current_dir(project_path).map_err(|e| {
         VerifyError::InternalServerError(format!("Could not set current directory: {}", e))
     })?;
-    let build_commands = project.build_commands().map_err(|e| {
+    let build_commands = project.build_commands(json.build_config.build_hint).map_err(|e| {
         VerifyError::InternalServerError(format!("Could not find build commands: {}", e))
     })?;
     let mut verified_contracts: HashMap<Chain, VerificationMatch> = HashMap::new();
@@ -389,25 +414,30 @@ async fn clone_repo_and_checkout_commit(
     temp_dir: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("  Cloning repository into a temporary directory.");
-    let status =
-        Command::new("git").arg("clone").arg(repo_url).arg(temp_dir).arg("--quiet").status()?;
+
+    let status = Command::new("git")
+        .arg("clone")
+        .arg(repo_url)
+        .arg(".") // Clone directly into the `temp_dir` instead of creating a subdirectory.
+        .arg("--quiet")
+        .current_dir(temp_dir)
+        .status()?;
 
     if !status.success() {
         return Err(format!("Failed to clone the repository. Exit status: {}", status).into())
     }
 
-    let cwd = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir)?;
-
     println!("  Checking out the given commit.");
-    let status = Command::new("git").arg("checkout").arg(commit_hash).arg("--quiet").status()?;
+    let status = Command::new("git")
+        .arg("checkout")
+        .arg(commit_hash)
+        .arg("--quiet")
+        .current_dir(temp_dir)
+        .status()?;
 
     if !status.success() {
         return Err(format!("Failed to checkout the commit. Exit status: {}", status).into())
     }
-
-    std::env::set_current_dir(cwd)?;
     println!("  Done.");
-
     Ok(())
 }

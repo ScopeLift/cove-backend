@@ -24,7 +24,7 @@ pub trait Framework {
     where
         Self: Sized;
     fn is_supported(path: &Path) -> bool;
-    fn build_commands(&self) -> Result<Vec<Command>, Box<dyn Error>>;
+    fn build_commands(&self, hint: Option<String>) -> Result<Vec<Command>, Box<dyn Error>>;
     fn get_artifacts(&self) -> Result<Vec<PathBuf>, Box<dyn Error>>;
 
     // Bytecode structuring.
@@ -44,7 +44,6 @@ pub trait Framework {
     ) -> Result<FoundDeployedBytecode, Box<dyn Error>>;
     fn structure_expected_deployed_code(
         &self,
-        artifact: &Path,
         found: &FoundDeployedBytecode,
         expected: &Bytes,
     ) -> Result<ExpectedDeployedBytecode, Box<dyn Error>>;
@@ -121,13 +120,25 @@ impl Framework for Foundry {
         file.exists() && file.is_file()
     }
 
-    // TODO We currently only support forge projects and assume the user is using the default forge
-    // directory structure of `src/`, `lib/`, and `out/`.
-    fn build_commands(&self) -> Result<Vec<Command>, Box<dyn Error>> {
+    fn build_commands(&self, hint: Option<String>) -> Result<Vec<Command>, Box<dyn Error>> {
+        // For forge projects, the hint is expected to be the profile name.
+        let maybe_profile_name = hint;
+
         let config_file = self.path.join("foundry.toml");
-        let profile_names = Self::foundry_profiles(&config_file)?;
+        let mut profile_names = Self::foundry_profiles(&config_file)?;
         println!("  Found profiles: {:?}", profile_names);
 
+        // If we are given a profile name, only build that profile, otherwise build all profiles.
+        if let Some(profile_name) = maybe_profile_name {
+            if !profile_names.contains(&profile_name) {
+                return Err(format!("Profile '{}' not found in foundry.toml.", profile_name).into())
+            }
+            profile_names = vec![profile_name];
+        } else {
+            return Err("Currently a profile name must be provided for forge projects.".into())
+        }
+
+        // Generate the build commands.
         let commands = profile_names
             .into_iter()
             .map(|profile_name| {
@@ -140,8 +151,7 @@ impl Framework for Foundry {
                     .arg("--build-info")
                     .arg("--build-info-path")
                     .arg("build_info")
-                    .env("FOUNDRY_PROFILE", profile_name)
-                    .env("FOUNDRY_BYTECODE_HASH", "none"); // TODO Account for bytecode hash later.
+                    .env("FOUNDRY_PROFILE", profile_name);
                 command
             })
             .collect::<Vec<Command>>();
@@ -273,7 +283,6 @@ impl Framework for Foundry {
 
     fn structure_expected_deployed_code(
         &self,
-        _artifact: &Path, // todo remove these unused args.
         found: &FoundDeployedBytecode,
         expected: &Bytes,
     ) -> Result<ExpectedDeployedBytecode, Box<dyn Error>> {
@@ -391,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn structure_found_creation_code() -> Result<(), Box<dyn Error>> {
+    fn test_structure_found_creation_code() -> Result<(), Box<dyn Error>> {
         struct TestCase {
             content: serde_json::Value,
             expected: FoundCreationBytecode,
@@ -440,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn structure_expected_creation_code() -> Result<(), Box<dyn Error>> {
+    fn test_structure_expected_creation_code() -> Result<(), Box<dyn Error>> {
         let foundry = Foundry { path: PathBuf::new() };
 
         // First test the case where expected code is too short to structure.
@@ -593,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn get_artifact_abi() -> Result<(), Box<dyn Error>> {
+    fn test_get_artifact_abi() -> Result<(), Box<dyn Error>> {
         struct TestCase {
             content: serde_json::Value,
             expected_num_methods: usize,
@@ -628,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn get_artifact_creation_code() -> Result<(), Box<dyn Error>> {
+    fn test_get_artifact_creation_code() -> Result<(), Box<dyn Error>> {
         struct TestCase {
             content: serde_json::Value,
             expected: Bytes,

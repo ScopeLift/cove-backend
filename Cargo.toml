@@ -5,13 +5,12 @@
 
 [dependencies]
   axum = "0.6.11"
-  colored = "2.0.0"
   config = "0.13.3"
   dotenvy = "0.15.6"
-  ethers = { git = "https://github.com/gakonst/ethers-rs" }
+  ethers = "2.0.4"
   futures = "0.3.27"
   headers = "0.3.8"
-  heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs.git", version = "0.4.0" }
+  heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs.git", version = "0.4.5" }
   hyper = "0.14.25"
   serde = { version = "1.0.155", features = ["derive"] }
   serde_json = "1.0.94"

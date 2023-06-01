@@ -1,8 +1,8 @@
 use ethers::{solc::artifacts::Offsets, types::Bytes};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 
 pub enum MatchType {
     Full,
@@ -184,7 +184,53 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn parse_metadata() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_creation_code_equality_check() -> Result<(), Box<dyn std::error::Error>> {
+        let found_code = Bytes::from_str("60606040525b6102c05b60")?;
+        let partial_match_code = Bytes::from_str("60606040525b6102c05b600000000000")?;
+        let no_match_code = Bytes::from_str("ff")?;
+
+        let found = FoundCreationBytecode {
+            raw_code: found_code.clone(),
+            leading_code: found_code.clone(),
+            metadata: MetadataInfo::default(),
+        };
+
+        let expected_full = ExpectedCreationBytecode {
+            raw_code: found_code.clone(),
+            leading_code: found_code.clone(),
+            metadata: MetadataInfo::default(),
+            constructor_args: None,
+        };
+
+        let expected_partial = ExpectedCreationBytecode {
+            raw_code: partial_match_code.clone(),
+            leading_code: found_code.clone(),
+            metadata: MetadataInfo::default(),
+            constructor_args: None,
+        };
+
+        let expected_none = ExpectedCreationBytecode {
+            raw_code: no_match_code.clone(),
+            leading_code: no_match_code.clone(),
+            metadata: MetadataInfo::default(),
+            constructor_args: None,
+        };
+
+        assert_eq!(creation_code_equality_check(&found, &expected_none), MatchType::None);
+        assert_eq!(creation_code_equality_check(&found, &expected_full), MatchType::Full);
+        assert_eq!(creation_code_equality_check(&found, &expected_partial), MatchType::Partial);
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "TODO"]
+    fn test_deployed_code_equality_check() -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let test_cases = vec![
             (19, Bytes::from_str("ffffffffffffffffffffffffffffffffff0011")?),
             (258, Bytes::from_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0100")?)
@@ -193,6 +239,24 @@ mod tests {
             let metadata = super::parse_metadata(&data);
             assert_eq!(expected_len, metadata.end_index.unwrap() - metadata.start_index.unwrap());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn split_at_metadata_hash() -> Result<(), Box<dyn std::error::Error>> {
+        #[rustfmt::skip]
+        let test_cases = vec![
+            ("676e6174757265206c656e677468a2646970667358221220dceca8706b29e917dacf25fceef95acac8d90d765ac926663ce4096195952b6164736f6c634300060b0033","676e6174757265206c656e677468","a2646970667358221220dceca8706b29e917dacf25fceef95acac8d90d765ac926663ce4096195952b6164736f6c634300060b0033"),
+            ("57600080fd5b5056fea164736f6c6343000706000a","57600080fd5b5056fe","a164736f6c6343000706000a"),
+        ];
+
+        for (code, expected_leading_code, expected_metadata_hash) in test_cases {
+            let (leading_code, metadata_hash) =
+                super::split_at_metadata_hash(&Bytes::from_str(code)?);
+            assert_eq!(leading_code, Bytes::from_str(expected_leading_code)?);
+            assert_eq!(metadata_hash, Bytes::from_str(expected_metadata_hash).ok());
+        }
+
         Ok(())
     }
 
@@ -213,24 +277,6 @@ mod tests {
             let length = super::get_metadata_hash_length(&code);
             assert_eq!(length, expected_length);
         }
-        Ok(())
-    }
-
-    #[test]
-    fn split_at_metadata_hash() -> Result<(), Box<dyn std::error::Error>> {
-        #[rustfmt::skip]
-        let test_cases = vec![
-            ("676e6174757265206c656e677468a2646970667358221220dceca8706b29e917dacf25fceef95acac8d90d765ac926663ce4096195952b6164736f6c634300060b0033","676e6174757265206c656e677468","a2646970667358221220dceca8706b29e917dacf25fceef95acac8d90d765ac926663ce4096195952b6164736f6c634300060b0033"),
-            ("57600080fd5b5056fea164736f6c6343000706000a","57600080fd5b5056fe","a164736f6c6343000706000a"),
-        ];
-
-        for (code, expected_leading_code, expected_metadata_hash) in test_cases {
-            let (leading_code, metadata_hash) =
-                super::split_at_metadata_hash(&Bytes::from_str(code)?);
-            assert_eq!(leading_code, Bytes::from_str(expected_leading_code)?);
-            assert_eq!(metadata_hash, Bytes::from_str(expected_metadata_hash).ok());
-        }
-
         Ok(())
     }
 }
