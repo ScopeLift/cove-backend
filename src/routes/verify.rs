@@ -24,7 +24,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     result::Result,
-    str::FromStr,
 };
 use tempfile::TempDir;
 
@@ -51,7 +50,7 @@ pub struct BuildConfig {
 pub struct VerifyData {
     repo_url: String,
     repo_commit: String,
-    contract_address: String,
+    contract_address: Address,
     build_config: BuildConfig,
     creation_tx_hashes: Option<HashMap<Chain, TxHash>>,
 }
@@ -109,59 +108,54 @@ impl IntoResponse for VerifyError {
     }
 }
 
+macro_rules! impl_from_for_verify_error {
+    ($error_type:ty) => {
+        impl From<$error_type> for VerifyError {
+            fn from(err: $error_type) -> Self {
+                VerifyError::InternalServerError(err.to_string())
+            }
+        }
+    };
+}
+
+impl_from_for_verify_error!(Box<dyn std::error::Error>);
+impl_from_for_verify_error!(std::io::Error);
+impl_from_for_verify_error!(&str);
+impl_from_for_verify_error!(serde_json::Error);
+
 // ===================================
 // ======== Main verification ========
 // ===================================
 
-// #[tracing::instrument(
-//     name = "Verifying contract",
-//     skip(json),
-//     fields(
-//         repo_url = %json.repo_url,
-//         repo_commit = %json.repo_commit,
-//         contract_address = %json.contract_address,
-//     )
-// )]
+#[tracing::instrument(
+    name = "Verifying contract",
+    skip(json),
+    fields(
+        repo_url = %json.repo_url,
+        repo_commit = %json.repo_commit,
+        contract_address = %json.contract_address,
+    )
+)]
 pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyError> {
-    let repo_url = json.repo_url.as_str();
-    let commit_hash = json.repo_commit.as_str();
-    let contract_addr = Address::from_str(json.contract_address.as_str())
-        .map_err(|e| VerifyError::BadRequest(format!("Invalid contract address: {}", e)))?;
-
     println!("\nVERIFICATION INPUTS:");
-    println!("  Repo URL:         {}", repo_url);
-    println!("  Commit Hash:      {}", commit_hash);
-    println!("  Contract Address: {:?}", contract_addr);
+    println!("  Repo URL:         {}", json.repo_url);
+    println!("  Commit Hash:      {}", json.repo_commit);
+    println!("  Contract Address: {:#?}", json.contract_address);
 
-    println!("\nFETCHING CODE");
+    println!("\nVERIFYING INPUTS");
     let provider = MultiChainProvider::default();
-
-    // We must have deployed code, but we may not be able to get creation code.
-    let deployed_code = provider.get_deployed_code(contract_addr).await.map_err(|e| {
-        VerifyError::InternalServerError(format!("Could not fetch deployed code: {}", e))
-    })?;
-    if deployed_code.is_all_none() {
-        let msg = format!("No deployed code found for contract {:?}", contract_addr);
-        return Err(VerifyError::BadRequest(msg))
-    }
-
-    let creation_data = provider.get_creation_code(contract_addr, json.creation_tx_hashes).await;
-
-    // Create a temporary directory for the cloned repository.
-    println!("\nCLONING REPOSITORY");
-    let temp_dir = TempDir::new().map_err(|e| {
-        VerifyError::InternalServerError(format!("Could not create directory to clone repo: {}", e))
-    })?;
+    let temp_dir = TempDir::new()?;
     let project_path = &temp_dir.path();
 
-    // Clone the repository and check out the commit.
-    clone_repo_and_checkout_commit(repo_url, commit_hash, project_path)
-        .await
-        .map_err(|e| VerifyError::BadRequest(format!("Could not clone repo: {}", e)))?;
+    let deployed_code = verify_user_inputs(&json, project_path, &provider).await?;
+    let creation_data =
+        provider.get_creation_code(json.contract_address, json.creation_tx_hashes).await;
 
     // Determine the framework used by the project. For now we only support Foundry.
     let project = match json.build_config.framework {
-        BuildFramework::Foundry => Foundry::new(project_path).unwrap(),
+        BuildFramework::Foundry => Foundry::new(project_path).map_err(|e| {
+            VerifyError::BadRequest(format!("Failed to create Foundry project: {}", e))
+        })?,
         _ => {
             let msg = format!("Unsupported framework: {:?}", json.build_config.framework);
             return Err(VerifyError::BadRequest(msg))
@@ -170,21 +164,15 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
 
     // Get the build commands for the project.
     println!("\nBUILDING CONTRACTS AND COMPARING BYTECODE");
-    std::env::set_current_dir(project_path).map_err(|e| {
-        VerifyError::InternalServerError(format!("Could not set current directory: {}", e))
-    })?;
-    let build_commands = project.build_commands(json.build_config.build_hint).map_err(|e| {
-        VerifyError::InternalServerError(format!("Could not find build commands: {}", e))
-    })?;
+    std::env::set_current_dir(project_path)?;
+    let build_commands = project.build_commands(json.build_config.build_hint)?;
     let mut verified_contracts: HashMap<Chain, VerificationMatch> = HashMap::new();
 
     for mut build_command in build_commands {
         println!("  Building with command: {}", format!("{:?}", build_command).replace('"', ""));
 
         // Build the contracts.
-        let build_result = build_command.output().map_err(|e| {
-            VerifyError::InternalServerError(format!("Failed to execute command: {}", e))
-        })?;
+        let build_result = build_command.output()?;
         if !build_result.status.success() {
             println!("    Build failed, continuing to next build command.");
             continue // This profile might not compile, e.g. perhaps it fails with stack too deep.
@@ -218,12 +206,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
                         continue
                     }
                     // Extract contract name from path by removing the extension
-                    let stem = deployed_match.artifact.file_stem().ok_or("Bad file name").map_err(
-                        |e| {
-                            let msg = format!("Could not split file name: {}", e);
-                            VerifyError::InternalServerError(msg)
-                        },
-                    )?;
+                    let stem = deployed_match.artifact.file_stem().ok_or("Bad file name")?;
                     println!(
                         "    ✅ Found matching creation and deployed code on chain {:?}: {:?}",
                         chain, stem
@@ -238,12 +221,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
                     verified_contracts.insert(*chain, verification_match);
                 }
                 (Some(deployed_match), None) => {
-                    let stem = deployed_match.artifact.file_stem().ok_or("Bad file name").map_err(
-                        |e| {
-                            let msg = format!("Could not split file name: {}", e);
-                            VerifyError::InternalServerError(msg)
-                        },
-                    )?;
+                    let stem = deployed_match.artifact.file_stem().ok_or("Bad file name")?;
                     println!(
                         "    ✅ Found matching deployed code on chain {:?}: {:?}",
                         chain, stem
@@ -258,12 +236,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
                     verified_contracts.insert(*chain, verification_match);
                 }
                 (None, Some(creation_match)) => {
-                    let stem = creation_match.artifact.file_stem().ok_or("Bad file name").map_err(
-                        |e| {
-                            let msg = format!("Could not split file name: {}", e);
-                            VerifyError::InternalServerError(msg)
-                        },
-                    )?;
+                    let stem = creation_match.artifact.file_stem().ok_or("Bad file name")?;
                     println!(
                         "    ✅ Found matching creation code on chain {:?}: {:?}",
                         chain, stem
@@ -297,12 +270,8 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     // Get the artifact for the contract. We just arbitrarily pick the first one.
     let chain = &verified_contracts.keys().next().unwrap().clone();
     let contract_match = verified_contracts.get(chain).unwrap();
-    let artifact_content = fs::read_to_string(&contract_match.artifact)
-        .map_err(|e| VerifyError::InternalServerError(format!("Could not read artifact: {}", e)))?;
-    let artifact: ConfigurableContractArtifact =
-        serde_json::from_str(&artifact_content).map_err(|e| {
-            VerifyError::InternalServerError(format!("Could not parse artifact: {}", e))
-        })?;
+    let artifact_content = fs::read_to_string(&contract_match.artifact)?;
+    let artifact: ConfigurableContractArtifact = serde_json::from_str(&artifact_content)?;
 
     // Extract the compiler data.
     let metadata = artifact.metadata.unwrap();
@@ -327,22 +296,12 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
         .unwrap()
         .filter_map(Result::ok)
         .find(|entry| entry.path().extension().unwrap_or_default() == "json")
-        .ok_or("Bad file name")
-        .map_err(|e| {
-            VerifyError::InternalServerError(format!(
-                "JSON file not found in build_info directory: {}",
-                e
-            ))
-        })?;
+        .ok_or("Bad file name")?;
 
-    let build_info_content = fs::read_to_string(build_info_file.path()).map_err(|e| {
-        VerifyError::InternalServerError(format!("Could not read build info file: {}", e))
-    })?;
+    let build_info_content = fs::read_to_string(build_info_file.path())?;
 
     // Now we merge the data into our sources vector.
-    let build_info: BuildInfo = serde_json::from_str(&build_info_content).map_err(|e| {
-        VerifyError::InternalServerError(format!("Could not parse build info file: {}", e))
-    })?;
+    let build_info: BuildInfo = serde_json::from_str(&build_info_content)?;
 
     let mut sources: Vec<SourceFile> = source_file_names
         .iter()
@@ -386,9 +345,9 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     let creation_code = selected_creation_data.map(|x| x.creation_code.clone());
 
     let response = SuccessfulVerification {
-        repo_url: repo_url.to_string(),
-        repo_commit: commit_hash.to_string(),
-        contract_address: contract_addr,
+        repo_url: json.repo_url,
+        repo_commit: json.repo_commit,
+        contract_address: json.contract_address,
         matches: verified_contracts,
         sources,
         creation_tx_hash,
@@ -406,6 +365,29 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     println!("  200 response returned.");
 
     Ok((StatusCode::OK, Json(response)).into_response())
+}
+
+async fn verify_user_inputs(
+    json: &VerifyData,
+    project_path: &Path,
+    provider: &MultiChainProvider,
+) -> Result<ChainResponse<Bytes>, VerifyError> {
+    // Clone repo and checkout commit
+    match clone_repo_and_checkout_commit(&json.repo_url, &json.repo_commit, project_path).await {
+        Ok(_) => (),
+        Err(err) => {
+            let msg = format!("Failed to clone repository or checkout commit: {}", err);
+            return Err(VerifyError::BadRequest(msg))
+        }
+    };
+
+    // Fetch deployed code
+    let deployed_code = provider.get_deployed_code(json.contract_address).await?;
+    if deployed_code.is_all_none() {
+        return Err(VerifyError::BadRequest("No deployed code found for contract".to_string()))
+    }
+
+    Ok(deployed_code)
 }
 
 async fn clone_repo_and_checkout_commit(
