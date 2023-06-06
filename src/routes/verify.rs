@@ -108,29 +108,20 @@ impl IntoResponse for VerifyError {
     }
 }
 
-impl From<Box<dyn std::error::Error>> for VerifyError {
-    fn from(err: Box<dyn std::error::Error>) -> Self {
-        VerifyError::InternalServerError(err.to_string())
-    }
+macro_rules! impl_from_for_verify_error {
+    ($error_type:ty) => {
+        impl From<$error_type> for VerifyError {
+            fn from(err: $error_type) -> Self {
+                VerifyError::InternalServerError(err.to_string())
+            }
+        }
+    };
 }
 
-impl From<std::io::Error> for VerifyError {
-    fn from(err: std::io::Error) -> Self {
-        VerifyError::InternalServerError(err.to_string())
-    }
-}
-
-impl From<&str> for VerifyError {
-    fn from(err: &str) -> Self {
-        VerifyError::InternalServerError(err.to_string())
-    }
-}
-
-impl From<serde_json::Error> for VerifyError {
-    fn from(err: serde_json::Error) -> Self {
-        VerifyError::InternalServerError(err.to_string())
-    }
-}
+impl_from_for_verify_error!(Box<dyn std::error::Error>);
+impl_from_for_verify_error!(std::io::Error);
+impl_from_for_verify_error!(&str);
+impl_from_for_verify_error!(serde_json::Error);
 
 // ===================================
 // ======== Main verification ========
