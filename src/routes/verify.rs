@@ -147,7 +147,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     let temp_dir = TempDir::new()?;
     let project_path = &temp_dir.path();
 
-    let deployed_code = verify_user_inputs(&json, &project_path, &provider).await?;
+    let deployed_code = verify_user_inputs(&json, project_path, &provider).await?;
     let creation_data =
         provider.get_creation_code(json.contract_address, json.creation_tx_hashes).await;
 
