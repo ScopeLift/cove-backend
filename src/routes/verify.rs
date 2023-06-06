@@ -142,32 +142,20 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     println!("  Commit Hash:      {}", json.repo_commit);
     println!("  Contract Address: {:#?}", json.contract_address);
 
-    println!("\nFETCHING CODE");
+    println!("\nVERIFYING INPUTS");
     let provider = MultiChainProvider::default();
-
-    // We must have deployed code, but we may not be able to get creation code.
-    let deployed_code = provider.get_deployed_code(json.contract_address).await?;
-    if deployed_code.is_all_none() {
-        let msg = format!("No deployed code found for contract {:?}", json.contract_address);
-        return Err(VerifyError::BadRequest(msg))
-    }
-
-    let creation_data =
-        provider.get_creation_code(json.contract_address, json.creation_tx_hashes).await;
-
-    // Create a temporary directory for the cloned repository.
-    println!("\nCLONING REPOSITORY");
     let temp_dir = TempDir::new()?;
     let project_path = &temp_dir.path();
 
-    // Clone the repository and check out the commit.
-    clone_repo_and_checkout_commit(&json.repo_url, &json.repo_commit, project_path)
-        .await
-        .map_err(|e| VerifyError::BadRequest(format!("Error cloning repo: {}", e)))?;
+    let deployed_code = verify_user_inputs(&json, &project_path, &provider).await?;
+    let creation_data =
+        provider.get_creation_code(json.contract_address, json.creation_tx_hashes).await;
 
     // Determine the framework used by the project. For now we only support Foundry.
     let project = match json.build_config.framework {
-        BuildFramework::Foundry => Foundry::new(project_path).unwrap(),
+        BuildFramework::Foundry => Foundry::new(project_path).map_err(|e| {
+            VerifyError::BadRequest(format!("Failed to create Foundry project: {}", e))
+        })?,
         _ => {
             let msg = format!("Unsupported framework: {:?}", json.build_config.framework);
             return Err(VerifyError::BadRequest(msg))
@@ -377,6 +365,29 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     println!("  200 response returned.");
 
     Ok((StatusCode::OK, Json(response)).into_response())
+}
+
+async fn verify_user_inputs(
+    json: &VerifyData,
+    project_path: &Path,
+    provider: &MultiChainProvider,
+) -> Result<ChainResponse<Bytes>, VerifyError> {
+    // Clone repo and checkout commit
+    match clone_repo_and_checkout_commit(&json.repo_url, &json.repo_commit, project_path).await {
+        Ok(_) => (),
+        Err(err) => {
+            let msg = format!("Failed to clone repository or checkout commit: {}", err);
+            return Err(VerifyError::BadRequest(msg))
+        }
+    };
+
+    // Fetch deployed code
+    let deployed_code = provider.get_deployed_code(json.contract_address).await?;
+    if deployed_code.is_all_none() {
+        return Err(VerifyError::BadRequest("No deployed code found for contract".to_string()))
+    }
+
+    Ok(deployed_code)
 }
 
 async fn clone_repo_and_checkout_commit(
