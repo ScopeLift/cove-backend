@@ -26,6 +26,7 @@ use std::{
     result::Result,
 };
 use tempfile::TempDir;
+use uuid::Uuid;
 
 #[derive(Deserialize, Debug)]
 pub enum BuildFramework {
@@ -39,14 +40,14 @@ pub enum BuildFramework {
     Truffle,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct BuildConfig {
     framework: BuildFramework,
     // For forge, this is the profile name.
     build_hint: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct VerifyData {
     repo_url: String,
     repo_commit: String,
@@ -131,9 +132,11 @@ impl_from_for_verify_error!(serde_json::Error);
     name = "Verifying contract",
     skip(json),
     fields(
+        request_id = %Uuid::new_v4(),
         repo_url = %json.repo_url,
         repo_commit = %json.repo_commit,
-        contract_address = %json.contract_address,
+        contract_address = ?json.contract_address,
+        creation_tx_hashes = ?json.creation_tx_hashes,
     )
 )]
 pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyError> {
