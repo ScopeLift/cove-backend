@@ -94,6 +94,29 @@ pub struct VerificationMatch {
     deployed_code_match_type: MatchType,
 }
 
+#[derive(Serialize)]
+struct LogFields {
+    #[serde(rename = "UUID")]
+    uuid: String,
+    #[serde(rename = "Request ID")]
+    request_id: String,
+    #[serde(rename = "Repo URL")]
+    repo_url: String,
+    #[serde(rename = "Commit Hash")]
+    commit_hash: String,
+    #[serde(rename = "Contract Address")]
+    contract_address: String,
+    #[serde(rename = "Chain IDs")]
+    chain_ids: String,
+    #[serde(rename = "Success")]
+    success: String,
+}
+
+#[derive(Serialize)]
+struct LogRecord {
+    fields: LogFields,
+}
+
 pub enum VerifyError {
     BadRequest(String),
     InternalServerError(String),
@@ -145,6 +168,21 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     println!("  Commit Hash:      {}", json.repo_commit);
     println!("  Contract Address: {:#?}", json.contract_address);
 
+    println!("\nSAVING INPUTS");
+    // For simplicity for now, we generate a new UUID here since the `tracing::instrument` request
+    // ID is not available here.
+    let request_id = Uuid::new_v4();
+    let _ = save_data(
+        Uuid::new_v4(),
+        request_id,
+        &json.repo_url,
+        &json.repo_commit,
+        &json.contract_address,
+        &json.creation_tx_hashes,
+        false,
+    )
+    .await;
+
     println!("\nVERIFYING INPUTS");
     let provider = MultiChainProvider::default();
     let temp_dir = TempDir::new()?;
@@ -152,7 +190,7 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
 
     let deployed_code = verify_user_inputs(&json, project_path, &provider).await?;
     let creation_data =
-        provider.get_creation_code(json.contract_address, json.creation_tx_hashes).await;
+        provider.get_creation_code(json.contract_address, json.creation_tx_hashes.clone()).await;
 
     // Determine the framework used by the project. For now we only support Foundry.
     let project = match json.build_config.framework {
@@ -347,6 +385,17 @@ pub async fn verify(Json(json): Json<VerifyData>) -> Result<Response, VerifyErro
     let creation_block_number = block_num.map(|x| x.as_number().unwrap().as_u64());
     let creation_code = selected_creation_data.map(|x| x.creation_code.clone());
 
+    let _ = save_data(
+        Uuid::new_v4(),
+        request_id,
+        &json.repo_url,
+        &json.repo_commit,
+        &json.contract_address,
+        &json.creation_tx_hashes,
+        true,
+    )
+    .await;
+
     let response = SuccessfulVerification {
         repo_url: json.repo_url,
         repo_commit: json.repo_commit,
@@ -425,4 +474,49 @@ async fn clone_repo_and_checkout_commit(
     }
     println!("  Done.");
     Ok(())
+}
+
+async fn save_data(
+    uuid: Uuid,
+    request_id: Uuid,
+    repo_url: &str,
+    commit_hash: &str,
+    contract_address: &Address,
+    creation_tx_hashes: &Option<HashMap<Chain, TxHash>>,
+    success: bool,
+) {
+    let client = reqwest::Client::new();
+
+    let base_id = std::env::var("AIRTABLE_BASE_ID").unwrap_or_default();
+    let table_id = std::env::var("AIRTABLE_TABLE_ID").unwrap_or_default();
+    let pat = std::env::var("AIRTABLE_PAT").unwrap_or_default();
+
+    // If all required environment variables are defined
+    if !base_id.is_empty() && !table_id.is_empty() && !pat.is_empty() {
+        let url = format!("https://api.airtable.com/v0/{base_id}/{table_id}");
+        let chain_ids: String = match creation_tx_hashes {
+            Some(map) => map
+                .keys()
+                .map(|chain| format!("{:?}", chain)) // Use format to convert Chain to String
+                .collect::<Vec<_>>() // Collect the Strings into a Vec
+                .join(","), // Join the Vec into a single String
+            None => String::new(), // If there's no HashMap, use an empty String
+        };
+
+        let record = LogRecord {
+            fields: LogFields {
+                uuid: uuid.to_string(),
+                request_id: request_id.to_string(),
+                repo_url: repo_url.into(),
+                commit_hash: commit_hash.into(),
+                contract_address: format!("{:#?}", contract_address),
+                chain_ids,
+                success: if success { "true" } else { "N/A" }.into(),
+            },
+        };
+
+        let _ = client.post(&url).bearer_auth(pat).json(&record).send().await;
+    } else {
+        println!("Env vars not defined, not saving off data.");
+    }
 }
