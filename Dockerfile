@@ -30,8 +30,18 @@ RUN cargo build --release
 FROM debian:bullseye-slim AS runtime
 WORKDIR /app
 
+# Install necessary packages.
+# This is similar but not identical to the builder stage's install.
+RUN apt-get update && \
+  apt-get install -y openssl ca-certificates git && \
+  # Clean up.
+  apt-get autoremove -y && \
+  apt-get clean -y && \
+  rm -rf /var/lib/apt/lists/*
+
 # Copy the binary from the builder stage.
 COPY --from=builder /app/target/release/cove cove
+COPY --from=builder /root/.foundry/bin/forge /usr/local/bin/forge
 COPY config config
 ENV APP_ENVIRONMENT production
 
