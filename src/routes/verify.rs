@@ -29,18 +29,16 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub enum BuildFramework {
-    #[serde(rename = "foundry")]
     Foundry,
-    #[serde(rename = "hardhat")]
     Hardhat,
-    #[serde(rename = "ape")]
     Ape,
-    #[serde(rename = "truffle")]
     Truffle,
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct BuildConfig {
     framework: BuildFramework,
     // For forge, this is the profile name.
@@ -48,6 +46,7 @@ pub struct BuildConfig {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct VerifyData {
     repo_url: String,
     repo_commit: String,
