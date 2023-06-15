@@ -29,25 +29,32 @@ pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     match chain {
         // Mainnet + Testnets.
         Chain::Mainnet => {
+            println!("MAINNET_RPC_URL {}", env::var("MAINNET_RPC_URL").unwrap());
             Arc::new(Provider::<Http>::try_from(env::var("MAINNET_RPC_URL").unwrap()).unwrap())
         }
         Chain::Goerli => {
+            println!("GOERLI_RPC_URL {}", env::var("GOERLI_RPC_URL").unwrap());
             Arc::new(Provider::<Http>::try_from(env::var("GOERLI_RPC_URL").unwrap()).unwrap())
         }
         Chain::Sepolia => {
+            println!("SEPOLIA_RPC_URL {}", env::var("SEPOLIA_RPC_URL").unwrap());
             Arc::new(Provider::<Http>::try_from(env::var("SEPOLIA_RPC_URL").unwrap()).unwrap())
         }
         // Other chains.
         Chain::Optimism => {
+            println!("OPTIMISM_RPC_URL {}", env::var("OPTIMISM_RPC_URL").unwrap());
             Arc::new(Provider::<Http>::try_from(env::var("OPTIMISM_RPC_URL").unwrap()).unwrap())
         }
         Chain::Arbitrum => {
+            println!("ARBITRUM_ONE_RPC_URL {}", env::var("ARBITRUM_ONE_RPC_URL").unwrap());
             Arc::new(Provider::<Http>::try_from(env::var("ARBITRUM_ONE_RPC_URL").unwrap()).unwrap())
         }
         Chain::Polygon => {
+            println!("POLYGON_RPC_URL {}", env::var("POLYGON_RPC_URL").unwrap());
             Arc::new(Provider::<Http>::try_from(env::var("POLYGON_RPC_URL").unwrap()).unwrap())
         }
         Chain::XDai => {
+            println!("GNOSIS_CHAIN_RPC_URL {}", env::var("GNOSIS_CHAIN_RPC_URL").unwrap());
             Arc::new(Provider::<Http>::try_from(env::var("GNOSIS_CHAIN_RPC_URL").unwrap()).unwrap())
         }
         _ => panic!("Unsupported chain"),
@@ -147,7 +154,9 @@ impl MultiChainProvider {
             provider: &Arc<Provider<Http>>,
             address: Address,
         ) -> Option<Bytes> {
+            println!("provider {:?}", provider);
             let code = provider.get_code(address, None).await.ok()?;
+            println!("code {:?}", code);
             if code.is_empty() {
                 None
             } else {
@@ -159,6 +168,7 @@ impl MultiChainProvider {
             (*chain, find_deployed_code(provider, address).await)
         });
         let responses = future::join_all(futures).await.into_iter().collect::<HashMap<_, _>>();
+        println!("responses {:?}", responses);
         Ok(ChainResponse { responses })
     }
 
