@@ -360,14 +360,14 @@ async fn verify_counters() -> Result<(), Box<dyn std::error::Error>> {
     for (i, test_case) in test_cases.into_iter().enumerate() {
         let build_config = json!({
             "framework": framework,
-            "build_hint": test_case.build_hint
+            "buildHint": test_case.build_hint
         });
         let body = json!({
-            "repo_url": repo_url,
-            "repo_commit": repo_commit,
-            "contract_address": test_case.contract_address,
-            "build_config": build_config,
-            "creation_tx_hashes": Some(test_case.creation_tx_hashes),
+            "repoUrl": repo_url,
+            "repoCommit": repo_commit,
+            "contractAddress": test_case.contract_address,
+            "buildConfig": build_config,
+            "creationTxHashes": Some(test_case.creation_tx_hashes),
         });
 
         let response = client
@@ -397,7 +397,7 @@ async fn verify_seaport() -> Result<(), Box<dyn std::error::Error>> {
     let contract_address = "0x00000000000001ad428e4906aE43D8F9852d0dD6";
     let build_config = json!({
         "framework": "foundry",
-        "build_hint": "optimized"
+        "buildHint": "optimized"
     });
     let creation_tx_hashes = json!({
         "mainnet": "0x4f5eae3d221fe4a572d722a57c2fbfd252139e7580b7959d93eb2a8b05b666f6",
@@ -408,11 +408,11 @@ async fn verify_seaport() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let body = json!({
-        "repo_url": repo_url,
-        "repo_commit": repo_commit,
-        "contract_address": contract_address,
-        "build_config": build_config,
-        "creation_tx_hashes": Some(creation_tx_hashes),
+        "repoUrl": repo_url,
+        "repoCommit": repo_commit,
+        "contractAddress": contract_address,
+        "buildConfig": build_config,
+        "creationTxHashes": Some(creation_tx_hashes),
     });
 
     // Send request.
