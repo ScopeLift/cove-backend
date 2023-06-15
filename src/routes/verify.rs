@@ -434,7 +434,6 @@ async fn verify_user_inputs(
 
     // Fetch deployed code
     let deployed_code = provider.get_deployed_code(json.contract_address).await?;
-    println!("deployed_code {:?}", deployed_code);
     if deployed_code.is_all_none() {
         return Err(VerifyError::BadRequest("No deployed code found for contract".to_string()))
     }
