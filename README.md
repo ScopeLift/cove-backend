@@ -35,6 +35,21 @@ The current state of smart contract verification has a lot of room for improveme
 - [ ] Support traditional methods of verification (e.g. standard JSON input).
 - [ ] Build a first-party UI to showcase the functionality of Cove.
 
+## Development
+
+Run `cp .env.template .env` and fill in the environment variables.
+Then run `cargo run` to start the server or `cargo test` to run tests.
+
+Formatting and linting use the latest nightly version of Rust, and clippy warnings are treated as errors.
+Therefore use:
+
+- `cargo +nightly fmt` to format the code.
+- `cargo +nightly clippy --all --all-features -- -D warnings` to lint the code.
+
+Deployment is done with a docker container so all dependencies (e.g. git and foundry) can be installed in the container.
+To build the docker image, run `docker build --tag cove .` in the root directory.
+To start a container from that image, run `docker run --env-file .env -p 8000:8000 cove`
+
 [^1]: The frontend can be found in the [ScopeLift/cove-frontend](https://github.com/ScopeLift/cove-frontend) repo.
 [^2]: Creation transaction hashes and forge build profiles are required for now to reduce verification time and RPC usage.
 [^3]: Thanks to [heimdall-rs](https://github.com/Jon-Becker/heimdall-rs) by @Jon-Becker.
