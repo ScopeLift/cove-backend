@@ -105,8 +105,15 @@ impl Default for MultiChainProvider {
 
 impl MultiChainProvider {
     pub fn new() -> Self {
-        let chains =
-            vec![Chain::XDai, Chain::Goerli, Chain::Mainnet, Chain::Optimism, Chain::Polygon];
+        let chains = vec![
+            Chain::Arbitrum,
+            Chain::Goerli,
+            Chain::Mainnet,
+            Chain::Optimism,
+            Chain::Polygon,
+            Chain::Sepolia,
+            Chain::XDai,
+        ];
 
         let providers = chains
             .iter()
