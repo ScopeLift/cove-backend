@@ -55,6 +55,11 @@ pub fn creation_code_equality_check(
     found: &FoundCreationBytecode,
     expected: &ExpectedCreationBytecode,
 ) -> MatchType {
+    // If bytecode is empty, we have an interface, and we can't match with an interface.
+    if found.raw_code.is_empty() {
+        return MatchType::None
+    }
+
     // Expected code might contain appended constructor arguments, so if code matches then expected
     // can only be equal to or longer than found code.
     if found.raw_code.len() > expected.raw_code.len() {
@@ -74,6 +79,11 @@ pub fn deployed_code_equality_check(
     found: &FoundDeployedBytecode,
     expected: &ExpectedDeployedBytecode,
 ) -> MatchType {
+    // If bytecode is empty, we have an interface, and we can't match with an interface.
+    if found.raw_code.is_empty() {
+        return MatchType::None
+    }
+
     // Expected and found code must have the same length.
     if found.raw_code.len() != expected.raw_code.len() {
         return MatchType::None

@@ -372,7 +372,14 @@ impl Framework for Foundry {
             })?
             .get("settings")
             .ok_or_else(|| {
-                format!("Missing 'settings' field in metadata JSON: {}", artifact.display())
+                format!("Missing 'metdata.settings' field in metadata JSON: {}", artifact.display())
+            })?
+            .get("metadata")
+            .ok_or_else(|| {
+                format!(
+                    "Missing 'metadata.settings.metadata' field in metadata JSON: {}",
+                    artifact.display()
+                )
             })?;
         let settings_metadata: SettingsMetadata = serde_json::from_value(settings_value.clone())?;
         Ok(settings_metadata)
@@ -411,7 +418,7 @@ mod tests {
             TestCase {
                 content: json!({
                     "bytecode": { "object": "0x1234" },
-                    "metadata": { "settings": { "bytecodeHash": "none", "appendCBOR": false } },
+                    "metadata": { "settings":{ "metadata": { "bytecodeHash": "none", "appendCBOR": false } }},
                 }),
                 expected: FoundCreationBytecode {
                     raw_code: Bytes::from_str("0x1234")?,
@@ -423,7 +430,7 @@ mod tests {
             TestCase {
                 content: json!({
                     "bytecode": { "object": "0x1234567890abcdef0002" },
-                    "metadata": { "settings": { "bytecodeHash": "ipfs", "appendCBOR": true } },
+                    "metadata": { "settings":{ "metadata": { "bytecodeHash": "ipfs", "appendCBOR": true } }},
                 }),
                 expected: FoundCreationBytecode {
                     raw_code: Bytes::from_str("0x1234567890abcdef0002")?,
@@ -706,7 +713,7 @@ mod tests {
         let test_cases = vec![
             // Test case 1: Both `bytecodeHash` and `appendCBOR` fields are present.
             TestCase {
-                content: json!({ "metadata": { "settings": { "bytecodeHash": "ipfs", "appendCBOR": true }}}),
+                content: json!({ "metadata": { "settings":{ "metadata": { "bytecodeHash": "ipfs", "appendCBOR": true }}}}),
                 expected: SettingsMetadata {
                     use_literal_content: None,
                     bytecode_hash: Some(BytecodeHash::Ipfs),
@@ -715,7 +722,7 @@ mod tests {
             },
             // Test case 2: both `bytecodeHash` and `appendCBOR` fields are missing
             TestCase {
-                content: json!({ "metadata": { "settings": {} } }),
+                content: json!({ "metadata": { "settings":{ "metadata": {} } }}),
                 expected: SettingsMetadata {
                     use_literal_content: None,
                     bytecode_hash: None,
@@ -724,7 +731,7 @@ mod tests {
             },
             // Test case 3: `bytecodeHash` field is present, `appendCBOR` field is missing
             TestCase {
-                content: json!({ "metadata": { "settings": { "bytecodeHash": "bzzr1" } } }),
+                content: json!({ "metadata": { "settings":{ "metadata": { "bytecodeHash": "bzzr1" } } }}),
                 expected: SettingsMetadata {
                     use_literal_content: None,
                     bytecode_hash: Some(BytecodeHash::Bzzr1),
@@ -733,7 +740,7 @@ mod tests {
             },
             // Test case 4: `bytecodeHash` field is missing, `appendCBOR` field is present
             TestCase {
-                content: json!({ "metadata": { "settings": { "appendCBOR": false } } }),
+                content: json!({ "metadata": { "settings":{ "metadata": { "appendCBOR": false } } }}),
                 expected: SettingsMetadata {
                     use_literal_content: None,
                     bytecode_hash: None,
