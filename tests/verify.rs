@@ -388,25 +388,53 @@ async fn verify_counters() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn verify_seaport() -> Result<(), Box<dyn std::error::Error>> {
+    run_integration_test(
+        "https://github.com/ProjectOpenSea/seaport",
+        "d58a91d218b0ab557543c8a292710aa36e693973",
+        "0x00000000000001ad428e4906aE43D8F9852d0dD6",
+        json!({
+            "framework": "foundry",
+            "buildHint": "optimized"
+        }),
+        json!({
+            "mainnet": "0x4f5eae3d221fe4a572d722a57c2fbfd252139e7580b7959d93eb2a8b05b666f6",
+            "polygon": "0x7c0a769c469d24859cbcb978caacd9b6d5eea1f50ae6c1b3c94d4819375e0b09",
+            "optimism": "0x3a46979922e781895fae9cba54df645b813eb55447703f590d51af1993ad59d4",
+            "arbitrum": "0xa150f5c8bf8b8a0fc5f4f64594d09d796476974280e566fe3899b56517cd11da",
+            "gnosis_chain": "0xfc189820c60536e2ce90443ac3d39633583cfed6653d5f7edd7c0e115fd2a18b",
+        }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn verify_gitcoin_governor_alpha() -> Result<(), Box<dyn std::error::Error>> {
+    run_integration_test(
+        "https://github.com/gitcoinco/Alpha-Governor-Upgrade",
+        "17f7717eec0604505da2faf3f65516a8619063a0",
+        "0x1a84384e1f1b12D53E60C8C528178dC87767b488",
+        json!({
+            "framework": "foundry",
+            "buildHint": "default"
+        }),
+        json!({
+            "mainnet": "0x61d669c6c0b976637b8f4528b99b170f060227b2bc20892743f22c6a34c84e23"
+        }),
+    )
+    .await
+}
+
+async fn run_integration_test(
+    repo_url: &str,
+    repo_commit: &str,
+    contract_address: &str,
+    build_config: serde_json::Value,
+    creation_tx_hashes: serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
     let app = common::spawn_app().await;
     let client = reqwest::Client::new();
 
     // POST request inputs.
-    let repo_url = "https://github.com/ProjectOpenSea/seaport";
-    let repo_commit = "d58a91d218b0ab557543c8a292710aa36e693973";
-    let contract_address = "0x00000000000001ad428e4906aE43D8F9852d0dD6";
-    let build_config = json!({
-        "framework": "foundry",
-        "buildHint": "optimized"
-    });
-    let creation_tx_hashes = json!({
-        "mainnet": "0x4f5eae3d221fe4a572d722a57c2fbfd252139e7580b7959d93eb2a8b05b666f6",
-        "polygon": "0x7c0a769c469d24859cbcb978caacd9b6d5eea1f50ae6c1b3c94d4819375e0b09",
-        "optimism": "0x3a46979922e781895fae9cba54df645b813eb55447703f590d51af1993ad59d4",
-        "arbitrum": "0xa150f5c8bf8b8a0fc5f4f64594d09d796476974280e566fe3899b56517cd11da",
-        "gnosis_chain": "0xfc189820c60536e2ce90443ac3d39633583cfed6653d5f7edd7c0e115fd2a18b",
-    });
-
     let body = json!({
         "repoUrl": repo_url,
         "repoCommit": repo_commit,
@@ -423,13 +451,11 @@ async fn verify_seaport() -> Result<(), Box<dyn std::error::Error>> {
         .send()
         .await?;
 
-    // Assertions.
     assert_eq!(200, response.status().as_u16());
+
     let response_body = response.text().await?;
-    println!("response_body {:?}", response_body);
     let verification_result: SuccessfulVerification =
         from_str(&response_body).expect("Failed to deserialize SuccessfulVerification");
-
     assert_eq!(repo_url, verification_result.repo_url);
     assert_eq!(repo_commit, verification_result.repo_commit);
     Ok(())
