@@ -3,12 +3,10 @@ use crate::bytecode::{
     parse_metadata, ExpectedCreationBytecode, ExpectedDeployedBytecode, FoundCreationBytecode,
     FoundDeployedBytecode, ImmutableReferences, MetadataInfo,
 };
-use ethers::{
-    solc::{
-        artifacts::{BytecodeHash, BytecodeObject, LosslessAbi, SettingsMetadata},
-        ConfigurableContractArtifact,
-    },
-    types::Bytes,
+use ethers::types::Bytes;
+use ethers_solc::{
+    artifacts::{BytecodeHash, BytecodeObject, LosslessAbi, SettingsMetadata},
+    ConfigurableContractArtifact,
 };
 use std::{
     error::Error,
@@ -403,7 +401,7 @@ impl Framework for Foundry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ethers::solc::artifacts::{BytecodeHash, SettingsMetadata};
+    use ethers_solc::artifacts::{BytecodeHash, SettingsMetadata};
     use serde_json::json;
     use std::{error::Error, fs::File, io::Write, path::PathBuf, str::FromStr};
     use tempfile::NamedTempFile;

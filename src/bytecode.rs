@@ -1,4 +1,5 @@
-use ethers::{solc::artifacts::Offsets, types::Bytes};
+use ethers::types::Bytes;
+use ethers_solc::artifacts::Offsets;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
