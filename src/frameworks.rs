@@ -227,7 +227,14 @@ impl Framework for Foundry {
         let metadata_hash: Option<Bytes> = if let (Some(start_index), Some(end_index)) =
             (found.metadata.start_index, found.metadata.end_index)
         {
-            Some(expected[start_index..end_index].to_vec().into())
+            // There may be cases where the found bytecode has a full metadata hash, but the
+            // expected bytecode only has CBOR or none. In those cases the `end_index` will be
+            // longer than the length of the expected bytecode, and this line will panic since
+            // `end_index` will be out of bounds. To avoid this while still enabling verification
+            // for different metadata hashes, the end index is `min(end_index, expected.len())`.
+            // let end_index = std::cmp::min(end_index, expected.len());
+            let adjusted_end_index = std::cmp::min(end_index, expected.len());
+            Some(expected[start_index..adjusted_end_index].to_vec().into())
         } else {
             None
         };
@@ -300,7 +307,14 @@ impl Framework for Foundry {
         let metadata_hash: Option<Bytes> = if let (Some(start_index), Some(end_index)) =
             (found.metadata.start_index, found.metadata.end_index)
         {
-            Some(expected[start_index..end_index].to_vec().into())
+            // There may be cases where the found bytecode has a full metadata hash, but the
+            // expected bytecode only has CBOR or none. In those cases the `end_index` will be
+            // longer than the length of the expected bytecode, and this line will panic since
+            // `end_index` will be out of bounds. To avoid this while still enabling verification
+            // for different metadata hashes, the end index is `min(end_index, expected.len())`.
+            // let end_index = std::cmp::min(end_index, expected.len());
+            let adjusted_end_index = std::cmp::min(end_index, expected.len());
+            Some(expected[start_index..adjusted_end_index].to_vec().into())
         } else {
             None
         };
