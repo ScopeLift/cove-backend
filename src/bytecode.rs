@@ -90,6 +90,7 @@ pub fn deployed_code_equality_check(
         return MatchType::None
     }
 
+    // Simple check for exact match.
     if found.raw_code == expected.raw_code {
         return MatchType::Full
     }
@@ -97,35 +98,38 @@ pub fn deployed_code_equality_check(
     // Compare the leading code, but skip all chunks that contain immutables.
     if found.immutable_references == expected.immutable_references {
         // Flatten the map to just a vec of the references. Since we know found and expected have
-        // equal immutable references, we can just use the found ones.
+        // equal immutable references due to how the structs were constructed, we can just use the
+        // found ones.
         let mut offsets: Vec<Offsets> = Vec::new();
         for new_offsets in found.immutable_references.values() {
             offsets.extend(new_offsets.iter().cloned());
         }
 
-        let mut start: usize = 0;
-        let mut matches = true;
-
+        // The expected bytecode is deployed and therefore has real values for the immutables. The
+        // found bytecode uses zeroes as placeholders for the immutables (this is how solc works).
+        // Therefore for each immutable reference in the expected bytecode, we can replace the
+        // bytecode with zeroes, then compare the found bytecode with the expected bytecode.
+        // It's likely the metadata hashes won't match, so we adjust both the raw and leading code
+        // so we only have to loop through the offsets once.
+        let mut adjusted_expected_raw_code = expected.raw_code.to_vec();
+        let mut adjusted_expected_leading_code = expected.leading_code.to_vec();
         for offset in offsets {
-            // Slice the bytecode from the `start` index until the immutable's start index.
             let immutable_start: usize = offset.start.try_into().unwrap();
-            let found_chunk = &found.leading_code[start..immutable_start];
-            let expected_chunk = &expected.leading_code[start..immutable_start];
-
-            // If the chunks don't match, code does not match.
-            if found_chunk != expected_chunk {
-                matches = false;
-                break
-            }
-
-            // If the chunks do match, update `start` to be after the immutable and keep looping
-            // through the offsets.
             let immutable_length: usize = offset.length.try_into().unwrap();
-            start += immutable_length;
+            let immutable_end = immutable_start + immutable_length;
+            for i in immutable_start..immutable_end {
+                adjusted_expected_raw_code[i] = 0;
+                adjusted_expected_leading_code[i] = 0;
+            }
         }
 
-        // Now we check the final chunk of the bytecode after the last immutable.
-        if matches && found.leading_code[start..] == expected.leading_code[start..] {
+        // This matched with the metadata hash, so it's a full match.
+        if adjusted_expected_raw_code == found.raw_code {
+            return MatchType::Full
+        }
+
+        // Had to remove the metadata hash, so it's a partial match.
+        if adjusted_expected_leading_code == found.leading_code {
             return MatchType::Partial
         }
     }
