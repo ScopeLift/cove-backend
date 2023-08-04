@@ -8,13 +8,11 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use ethers::{
-    solc::{
-        artifacts::{Ast, CompactBytecode, CompactDeployedBytecode, LosslessAbi, MetadataSettings},
-        buildinfo::BuildInfo,
-        ConfigurableContractArtifact,
-    },
-    types::{Address, Bytes, Chain, TxHash},
+use ethers::types::{Address, Bytes, Chain, TxHash};
+use ethers_solc::{
+    artifacts::{Ast, CompactBytecode, CompactDeployedBytecode, LosslessAbi, MetadataSettings},
+    buildinfo::BuildInfo,
+    ConfigurableContractArtifact,
 };
 use serde::{Deserialize, Serialize};
 use std::{

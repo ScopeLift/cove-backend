@@ -29,26 +29,26 @@ pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     match chain {
         // Mainnet + Testnets.
         Chain::Mainnet => {
-            Arc::new(Provider::<Http>::try_from(env::var("MAINNET_RPC_URL").unwrap()).unwrap())
+            Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
         }
         Chain::Goerli => {
-            Arc::new(Provider::<Http>::try_from(env::var("GOERLI_RPC_URL").unwrap()).unwrap())
+            Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
         }
         Chain::Sepolia => {
-            Arc::new(Provider::<Http>::try_from(env::var("SEPOLIA_RPC_URL").unwrap()).unwrap())
+            Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
         }
         // Other chains.
         Chain::Optimism => {
-            Arc::new(Provider::<Http>::try_from(env::var("OPTIMISM_RPC_URL").unwrap()).unwrap())
+            Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
         }
         Chain::Arbitrum => {
-            Arc::new(Provider::<Http>::try_from(env::var("ARBITRUM_ONE_RPC_URL").unwrap()).unwrap())
+            Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
         }
         Chain::Polygon => {
-            Arc::new(Provider::<Http>::try_from(env::var("POLYGON_RPC_URL").unwrap()).unwrap())
+            Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
         }
         Chain::XDai => {
-            Arc::new(Provider::<Http>::try_from(env::var("GNOSIS_CHAIN_RPC_URL").unwrap()).unwrap())
+            Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
         }
         _ => panic!("Unsupported chain"),
     }
@@ -185,7 +185,6 @@ impl MultiChainProvider {
 
             let mut best_artifact_match: Option<ContractMatch> = None;
             for artifact in artifacts {
-                println!("Checking creation artifact: {:?}", artifact.as_path());
                 let found = match project.structure_found_creation_code(&artifact) {
                     Ok(found) => found,
                     Err(_) => continue,
