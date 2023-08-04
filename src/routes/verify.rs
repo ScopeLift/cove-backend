@@ -22,6 +22,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     result::Result,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -97,6 +98,8 @@ struct LogFields {
     uuid: String,
     #[serde(rename = "Request ID")]
     request_id: String,
+    #[serde(rename = "Timestamp")]
+    timestamp: u128,
     #[serde(rename = "Repo URL")]
     repo_url: String,
     #[serde(rename = "Commit Hash")]
@@ -504,6 +507,7 @@ async fn save_data(
             fields: LogFields {
                 uuid: uuid.to_string(),
                 request_id: request_id.to_string(),
+                timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
                 repo_url: repo_url.into(),
                 commit_hash: commit_hash.into(),
                 contract_address: format!("{:#?}", contract_address),
