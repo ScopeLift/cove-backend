@@ -2,3 +2,6 @@
 
 # heimdall-rs default output directory
 /output
+
+# env file
+.env
