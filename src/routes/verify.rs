@@ -27,68 +27,114 @@ use std::{
 use tempfile::TempDir;
 use uuid::Uuid;
 
+/// The build framework used by the repository.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum BuildFramework {
+    /// [Foundry](https://book.getfoundry.sh/).
     Foundry,
+    /// [Hardhat](https://hardhat.org/).
     Hardhat,
+    /// [Ape](https://apeworx.io/).
     Ape,
+    /// [Truffle](https://trufflesuite.com/).
     Truffle,
 }
 
+/// Data provided by the caller to instruct the Cove API how to build a repo.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildConfig {
+    /// The build framework used by the project. Currently only Foundry is supported.
     framework: BuildFramework,
-    // For forge, this is the profile name.
+    /// A framework-specific build hint. For Foundry this is the name of the profile to build with.
     build_hint: Option<String>,
 }
 
+/// Data that a caller provides to verify a contract.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyData {
+    /// The URL of the repository.
     repo_url: String,
+    /// The commit hash of the repository.
     repo_commit: String,
+    /// The address of the contract to verify.
     contract_address: Address,
+    /// The build configuration for the project, such as the framework and build instructions.
     build_config: BuildConfig,
+    /// Optional, the transaction hashes that created the contract. For now these are required to
+    /// verify creation code, to avoid binary searching blocks and tracing transactions to find
+    /// creation code.
     creation_tx_hashes: Option<HashMap<Chain, TxHash>>,
 }
 
+/// Details about the compiler used to compile the contract.
 #[derive(Serialize, Deserialize)]
 pub struct CompilerInfo {
-    compiler: String, // Includes version.
+    /// The compiler name and version.
+    compiler: String,
+    /// The language name.
     language: String,
+    /// The compiler metadata settings.
     settings: MetadataSettings,
 }
 
+/// Data returned for a successful verification.
 #[derive(Serialize, Deserialize)]
 pub struct SuccessfulVerification {
+    /// The URL of the repository.
     pub repo_url: String,
+    /// The commit hash of the repository.
     pub repo_commit: String,
+    /// The address of the contract that was verified.
     pub contract_address: Address,
+    /// A map from chain to the matching contract artifact and match types.
     pub matches: HashMap<Chain, VerificationMatch>,
+    /// The transaction hash that created the contract.
     pub creation_tx_hash: Option<TxHash>,
+    /// The block number containing the transaction hash that created the contract.
     pub creation_block_number: Option<u64>,
+    /// The creation code of the contract, also known as the init code. This is the code that was
+    /// executed to return the deployed code.
     pub creation_code: Option<Bytes>,
+    /// Array of source files that were used to compile the contract. The first source file is the
+    /// most-derived contract, i.e. the one that was deployed and verified.
     pub sources: Vec<SourceFile>,
+    /// The deployed code of the contract, also known as the runtime code. This is the code that
+    /// was returned by executing the creation code and lives at the contract address on-chain.
     pub runtime_code: Bytes,
+    /// The creation code of the contract, also known as the init code. This is the code that was
+    /// executed to return the deployed code.
     pub creation_bytecode: Option<CompactBytecode>,
+    /// The deployed code of the contract, also known as the runtime code. This is the code that
+    /// was returned by executing the creation code and lives at the contract address on-chain.
     pub deployed_bytecode: CompactDeployedBytecode,
+    /// The ABI of the verified contract.
     pub abi: LosslessAbi,
+    /// The name, version, and metadata settings of the compiler used to compile the contract.
     pub compiler_info: CompilerInfo,
+    /// The abstract syntax tree of the verified contract.
     pub ast: Ast,
 }
 
+/// Data about a specific Solidity source file.
 #[derive(Serialize, Deserialize)]
 pub struct SourceFile {
+    /// The path to the source file.
     path: PathBuf,
+    /// The full content of the source file, including both code and comments.
     content: String,
 }
 
+/// Contains data about whether the `artifact` matches the expected creation code or deployed code.
 #[derive(Serialize, Deserialize)]
 pub struct VerificationMatch {
+    /// The path to the artifact.
     artifact: PathBuf,
+    /// The type of match for the creation code.
     creation_code_match_type: MatchType,
+    /// The type of match for the deployed code.
     deployed_code_match_type: MatchType,
 }
 
@@ -117,8 +163,11 @@ struct LogRecord {
     fields: LogFields,
 }
 
+/// Returned if verification failed.
 pub enum VerifyError {
+    /// The caller provided data that was invalid.
     BadRequest(String),
+    /// The server encountered an error that was not the caller's fault.
     InternalServerError(String),
 }
 
@@ -151,6 +200,16 @@ impl_from_for_verify_error!(serde_json::Error);
 // ======== Main verification ========
 // ===================================
 
+/// Entrypoint for contract verification.
+///
+/// # Arguments
+///
+/// * `json` - The JSON payload containing verification input data.
+///
+/// # Returns
+///
+/// Returns a `Result` containing a `Response` if verification was successful, or a `VerifyError` if
+/// verification failed.
 #[tracing::instrument(
     name = "Verifying contract",
     skip(json),

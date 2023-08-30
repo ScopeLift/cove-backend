@@ -5,53 +5,88 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 
+/// Defines the types of bytecode matches that can occur.
 pub enum MatchType {
+    /// A full match means the bytecode and the metadata hash match.
     Full,
+    /// A partial match means the bytecode matches, but the metadata hash does not.
     Partial,
+    /// No match means the bytecode does not match.
     #[default]
     None,
 }
 
+/// Contains info about the the bytecode's metadata hash.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct MetadataInfo {
+    /// The metadata hash if present.
     pub hash: Option<Bytes>,
+    /// Start index of the metadata within bytecode.
     pub start_index: Option<usize>,
+    /// End index of the metadata within bytecode.
     pub end_index: Option<usize>,
 }
 
+/// Data about found creation bytecode, where "found" bytecode is bytecode from an artifact that was
+/// output when compiling the repo.
 #[derive(Debug, PartialEq, Eq)]
 pub struct FoundCreationBytecode {
+    /// The raw, unadjusted bytecode.
     pub raw_code: Bytes,
+    /// All bytecode leading up to the metadata hash.
     pub leading_code: Bytes,
+    /// Information about the metadata hash.
     pub metadata: MetadataInfo,
 }
 
+/// Data about expected creation bytecode, where "expected" bytecode is the bytecode that exists
+/// on-chain that is being verified against.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ExpectedCreationBytecode {
+    /// The raw, unadjusted bytecode.
     pub raw_code: Bytes,
+    /// The bytecode leading up to the metadata hash.
     pub leading_code: Bytes,
+    /// Information about the metadata hash.
     pub metadata: MetadataInfo,
+    /// Optional constructor arguments, which are typically appended to the creation code before
+    /// the metadata hash.
     pub constructor_args: Option<Bytes>,
 }
 
+/// Type alias for a mapping between immutable reference identifiers and their offsets within
+/// bytecode. This contains data from the `immutableReferences` field of an artifact.
 pub type ImmutableReferences = BTreeMap<String, Vec<Offsets>>;
 
+/// Data about found deployed bytecode, where "found" bytecode is bytecode from an artifact that was
+/// output when compiling the repo.
 #[derive(Debug, PartialEq, Eq)]
 pub struct FoundDeployedBytecode {
+    /// The raw, unadjusted bytecode.
     pub raw_code: Bytes,
+    /// All bytecode leading up to the metadata hash.
     pub leading_code: Bytes,
+    /// Information about the metadata hash.
     pub metadata: MetadataInfo,
+    /// Immutable references and their offsets within bytecode.
     pub immutable_references: ImmutableReferences,
 }
 
+/// Data about expected deployed bytecode, where "expected" bytecode is the bytecode that exists
+/// on-chain that is being verified against.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ExpectedDeployedBytecode {
+    /// The raw, unadjusted bytecode.
     pub raw_code: Bytes,
+    /// The bytecode leading up to the metadata hash.
     pub leading_code: Bytes,
+    /// Information about the metadata hash.
     pub metadata: MetadataInfo,
+    /// Immutable references and their offsets within bytecode.
     pub immutable_references: ImmutableReferences,
 }
 
+/// Checks for equality between found and expected creation bytecode and returns the type of match.
 pub fn creation_code_equality_check(
     found: &FoundCreationBytecode,
     expected: &ExpectedCreationBytecode,
@@ -76,6 +111,7 @@ pub fn creation_code_equality_check(
     MatchType::None
 }
 
+/// Checks for equality between found and expected deployed bytecode and returns the type of match.
 pub fn deployed_code_equality_check(
     found: &FoundDeployedBytecode,
     expected: &ExpectedDeployedBytecode,
@@ -137,9 +173,11 @@ pub fn deployed_code_equality_check(
     MatchType::None
 }
 
-// The implied length returned by this method, i.e. `end_index - start_index`, is the decimal value
-// of the last two bytes plus 2 bytes for the length itself. In other words, this returns the total
-// length of the metadata hash.
+/// Given code, infers and returns the metadata details.
+///
+/// The implied length returned by this method, i.e. `end_index - start_index`, is the decimal value
+/// of the last two bytes plus 2 bytes for the length itself. In other words, this returns the total
+/// length of the metadata hash.
 pub fn parse_metadata(code: &Bytes) -> MetadataInfo {
     let (leading_code, metadata_hash) = split_at_metadata_hash(code);
     let metadata_start_index =
@@ -153,7 +191,7 @@ pub fn parse_metadata(code: &Bytes) -> MetadataInfo {
     }
 }
 
-// Returns a tuple of (everything before the metadata hash, everything after the metadata hash)
+/// Returns a tuple of `(everything before the metadata hash, everything after the metadata hash)`.
 fn split_at_metadata_hash(code: &Bytes) -> (Bytes, Option<Bytes>) {
     // Read the length of the metadata hash from the last two bytes.
     let metadata_hash_length = get_metadata_hash_length(code);
@@ -173,8 +211,8 @@ fn split_at_metadata_hash(code: &Bytes) -> (Bytes, Option<Bytes>) {
     }
 }
 
-// The length returned by this method is the decimal value of the last two bytes. The total length
-// of the metadata hash is this value plus 2 bytes for the length itself.
+/// The length returned by this method is the decimal value of the last two bytes. The total length
+/// of the metadata hash is this value plus 2 bytes for the length itself.
 fn get_metadata_hash_length(code: &Bytes) -> Option<usize> {
     if code.len() <= 2 {
         return None

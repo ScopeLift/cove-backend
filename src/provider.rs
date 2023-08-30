@@ -9,15 +9,22 @@ use ethers::{
 use futures::future;
 use std::{collections::HashMap, env, error::Error, path::PathBuf, str::FromStr, sync::Arc};
 
+/// Contract creation data.
 pub struct ContractCreation {
+    /// The transaction hash of the contract creation transaction.
     pub tx_hash: TxHash,
+    /// The block number of the contract creation transaction.
     pub block: BlockNumber,
+    /// The creation code of the contract.
     pub creation_code: Bytes,
 }
 
+/// Match data for a given artifact.
 #[derive(Debug, Default, Clone)]
 pub struct ContractMatch {
+    /// Path to the artifact.
     pub artifact: PathBuf,
+    /// The type of match for that artifact against the expected code.
     pub match_type: MatchType,
 }
 
@@ -25,6 +32,7 @@ pub struct ContractMatch {
 // ======== Single Chain ========
 // ==============================
 
+/// Create a provider for the given chain.
 pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     match chain {
         // Mainnet + Testnets.
@@ -54,6 +62,7 @@ pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     }
 }
 
+/// Return the RPC provider URL for the given chain.
 pub fn provider_url_from_chain(chain: Chain) -> String {
     match chain {
         // Mainnet + Testnets.
@@ -69,6 +78,7 @@ pub fn provider_url_from_chain(chain: Chain) -> String {
     }
 }
 
+/// Return the runtime code at the given address using the given provider.
 pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Address) -> Bytes {
     provider.get_code(address, None).await.unwrap()
 }
@@ -77,23 +87,30 @@ pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Addr
 // ======== Multi-Chain ========
 // =============================
 
+/// The response from a multi-chain provider's query.
 #[derive(Debug, Default)]
 pub struct ChainResponse<T> {
+    /// A mapping from chain to the response for that chain.
     pub responses: HashMap<Chain, Option<T>>,
 }
 
 impl<T> ChainResponse<T> {
+    /// Returns `true` if all responses are `None`, `false` otherwise.
     pub fn is_all_none(&self) -> bool {
         self.responses.values().all(|value| value.is_none())
     }
 
+    /// Returns an iterator over the `Some` entries of the response.
     pub fn iter_entries(&self) -> impl Iterator<Item = (&Chain, &T)> {
         self.responses.iter().filter_map(|(key, value)| value.as_ref().map(|v| (key, v)))
     }
 }
 
+/// A provider that performs the same queries or operations across multiple chains simultaneously.
 pub struct MultiChainProvider {
+    /// The chains that this provider supports.
     pub chains: Vec<Chain>,
+    /// The provider for each chain.
     pub providers: HashMap<Chain, Arc<Provider<Http>>>,
 }
 
@@ -104,6 +121,7 @@ impl Default for MultiChainProvider {
 }
 
 impl MultiChainProvider {
+    /// Create a new `MultiChainProvider` with all supported chains.
     pub fn new() -> Self {
         let chains = vec![
             Chain::Arbitrum,
@@ -123,6 +141,7 @@ impl MultiChainProvider {
         Self { chains, providers }
     }
 
+    /// Given an address, return the creation code at that address for each supported chain.
     pub async fn get_creation_code(
         &self,
         address: Address,
@@ -146,6 +165,7 @@ impl MultiChainProvider {
         Ok(ChainResponse { responses })
     }
 
+    /// Given an address, return the deployed code at that address for each supported chain.
     pub async fn get_deployed_code(
         &self,
         address: Address,
@@ -169,6 +189,9 @@ impl MultiChainProvider {
         Ok(ChainResponse { responses })
     }
 
+    /// Given the creation code data being compared against and the build artifacts from a project,
+    /// compare the creation code against the expected creation code for each artifact and return
+    /// the best match found. It's possible that no match is found.
     pub fn compare_creation_code(
         &self,
         project: &impl Framework,
@@ -233,6 +256,9 @@ impl MultiChainProvider {
         ChainResponse { responses }
     }
 
+    /// Given the deployed code being compared against and the build artifacts from a project,
+    /// compare the deployed code against the expected deployed code for each artifact and return
+    /// the best match found. It's possible that no match is found.
     pub fn compare_deployed_code(
         &self,
         project: &impl Framework,
