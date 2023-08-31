@@ -20,11 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo --version --verbose
       - run: cargo build --release --all-features
 
@@ -32,11 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - uses: foundry-rs/foundry-toolchain@v1
       - run: cargo test --locked --all-features
 
@@ -44,27 +38,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: nightly
-          override: true
-          components: clippy, rustfmt
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
 
       - name: cargo fmt
-        uses: actions-rs/cargo@v1
+        uses: dtolnay/rust-toolchain@nightly
         with:
           command: fmt
           args: --all --check
 
       - name: cargo clippy
-        uses: actions-rs/clippy-check@v1
+        uses: dtolnay/rust-toolchain@nightly
         with:
           args: --all --all-features -- -D warnings -W clippy::missing_docs_in_private_items
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: cargo doc
-        uses: actions-rs/cargo@v1
+        uses: dtolnay/rust-toolchain@nightly
         env:
           RUSTDOCFLAGS: '-D missing_docs'
         with:
