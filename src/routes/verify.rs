@@ -200,15 +200,6 @@ impl IntoResponse for VerifyError {
 /// # Arguments
 ///
 /// * `$error_type:ty` - The specific error type you want to convert into `VerifyError`.
-///
-/// # Examples
-///
-/// ```
-/// impl_from_for_verify_error!(Box<dyn std::error::Error>);
-/// impl_from_for_verify_error!(std::io::Error);
-/// impl_from_for_verify_error!(&str);
-/// impl_from_for_verify_error!(serde_json::Error);
-/// ```
 macro_rules! impl_from_for_verify_error {
     ($error_type:ty) => {
         impl From<$error_type> for VerifyError {
