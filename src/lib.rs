@@ -1,4 +1,4 @@
-//! This crate provides a contract verification API.
+#![doc = include_str!("../README.md")]
 
 /// Contains methods and types for analyzing and comparing bytecode.
 pub mod bytecode;

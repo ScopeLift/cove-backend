@@ -14,8 +14,10 @@ use tempfile::TempDir;
 /// Data that the caller provides to lookup a contract.
 #[derive(Deserialize, Debug)]
 pub struct ContractQuery {
+    /// Chain the contract is deployed on.
     chain_id: u64,
-    address: String,
+    /// Address of the contract.
+    address: String, // TODO change this to `Address`.
 }
 
 /// Data returned for a verified contract.
@@ -51,9 +53,14 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
+/// Response for the contract route.
 enum ApiResponse {
-    _Verified(VerifiedResponse), // Leading underscore to avoid unused warning.
+    /// Contract is verified so verification data is returned. This is currently unused since Cove
+    /// does not persist verification data. This is why the leading underscore is used.
+    _Verified(VerifiedResponse),
+    /// Contract is not verified so decompilation data is returned.
     Decompiled(DecompiledResponse),
+    /// An error occurred while processing the request.
     Error(ErrorResponse),
 }
 

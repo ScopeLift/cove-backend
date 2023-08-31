@@ -147,6 +147,8 @@ impl MultiChainProvider {
         address: Address,
         creation_tx_hashes: Option<HashMap<Chain, TxHash>>,
     ) -> Result<ChainResponse<ContractCreation>, Box<dyn Error + Send + Sync>> {
+        /// Given an address, return the creation code at that address for the chain specified by
+        /// the provider.
         async fn find_creation_code(
             provider: &Arc<Provider<Http>>,
             address: Address,
@@ -170,6 +172,8 @@ impl MultiChainProvider {
         &self,
         address: Address,
     ) -> Result<ChainResponse<Bytes>, Box<dyn Error>> {
+        /// Given an address, return the deployed code at that address for the chain specified by
+        /// the given provider.
         async fn find_deployed_code(
             provider: &Arc<Provider<Http>>,
             address: Address,
@@ -197,6 +201,8 @@ impl MultiChainProvider {
         project: &impl Framework,
         creation_data: &ChainResponse<ContractCreation>,
     ) -> ChainResponse<ContractMatch> {
+        /// Compares the creation code against the expected creation code for each artifact and
+        /// returns the best match.
         fn compare(
             project: &impl Framework,
             expected_creation_code: &Bytes,
@@ -264,6 +270,8 @@ impl MultiChainProvider {
         project: &impl Framework,
         deployed_code: &ChainResponse<Bytes>,
     ) -> ChainResponse<ContractMatch> {
+        /// Compares the deployed code against the expected deployed code for each artifact and
+        /// returns the best match.
         fn compare(
             project: &impl Framework,
             expected_deployed_code: &Bytes,
@@ -321,6 +329,8 @@ impl MultiChainProvider {
     }
 }
 
+/// Given the transaction hash of a contract creation transaction, extracts the creation code from
+/// the transaction and returns the creation data. This feature is currently not supported.
 async fn find_creation_data(
     provider: &Arc<Provider<Http>>,
     address: Address,
@@ -336,11 +346,24 @@ async fn find_creation_data(
     Err("Automatically finding creation data is currently not supported.".into())
 }
 
+/// Given the transaction hash of a contract creation transaction, extracts the creation code from
+/// the transaction. This feature is currently not supported.
 async fn creation_code_from_tx_hash(
     provider: &Arc<Provider<Http>>,
     address: Address,
     tx_hash: TxHash,
 ) -> Result<(Bytes, Transaction), Box<dyn std::error::Error + Send + Sync>> {
+    // TODO This is not currently supported, but the flow would be as follows:
+    //   1. Fetch the transaction data.
+    //   2. If `to` is None, this was a regular CREATE transaction so we can extract the creation
+    //      code from the input data.
+    //   3. Otherwise, the contract was deployed by a factory. First, check the `to` address and see
+    //      if it's a known factory. If so, we'll know how to decode the transaction data to extract
+    //      the creation code.
+    //   4. If the `to` address is not a known factory, we trace the transaction to find the call
+    //      that deployed the contract. Infura now supports `trace_call` so we can use that here.
+    // Note that steps 1, 2, and 3 are implemented below. Step 4 is not implemented. Step 3 can also
+    // be expanded to support more factories, or it can be removed entirely and we can always trace.
     let tx = provider.get_transaction(tx_hash).await?.ok_or("Transaction not found")?;
 
     // Regular CREATE transaction.
