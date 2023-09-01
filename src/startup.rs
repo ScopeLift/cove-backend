@@ -15,6 +15,7 @@ use tower_http::{
     ServiceBuilderExt,
 };
 
+/// Run the application on the given TcpListener and return the HTTP server instance.
 pub fn run(listener: TcpListener) -> hyper::Result<Server<AddrIncoming, IntoMakeService<Router>>> {
     if dotenv().is_err() {
         // We don't error since there's no `.env` file in CI.

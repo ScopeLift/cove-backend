@@ -1,17 +1,30 @@
 use config::{Config, ConfigError, File};
 use serde::Deserialize;
 
+/// All settings for the server. Currently there are only application settings, but in the future
+/// there may be e.g. database settings.
 #[derive(Deserialize)]
 pub struct Settings {
+    /// Application settings.
     pub application: ApplicationSettings,
 }
 
+/// Application settings.
 #[derive(Deserialize)]
 pub struct ApplicationSettings {
+    /// The port number on which the application will listen.
     pub port: u16,
+
+    /// The hostname or IP address where the application will run.
+    ///
+    /// This is a `String` that specifies the network address at which the application is
+    /// accessible. This could be a hostname like "localhost" or an IP address like
+    /// "127.0.0.1".
     pub host: String,
 }
 
+/// Based on the `APP_ENVIRONMENT` environment variable, reads the corresponding configuration file
+/// and returns the settings.
 pub fn get_configuration() -> Result<Settings, ConfigError> {
     let base_path = std::env::current_dir().expect("Failed to get current directory");
     let config_dir = base_path.join("config");
@@ -30,11 +43,14 @@ pub fn get_configuration() -> Result<Settings, ConfigError> {
 
 /// The possible runtime environments for the application.
 pub enum Environment {
+    /// Local development environment.
     Local,
+    /// Production environment.
     Production,
 }
 
 impl Environment {
+    /// Returns the environment as a string.
     pub fn as_str(&self) -> &str {
         match self {
             Environment::Local => "local",

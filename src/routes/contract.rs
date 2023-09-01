@@ -1,4 +1,3 @@
-// TODO This route is a WIP since we don't yet store verified contracts in a database.
 use crate::provider::{contract_runtime_code, provider_from_chain, provider_url_from_chain};
 use axum::{
     extract::Query,
@@ -12,42 +11,68 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tempfile::TempDir;
 
+/// Data that the caller provides to lookup a contract.
 #[derive(Deserialize, Debug)]
 pub struct ContractQuery {
+    /// Chain the contract is deployed on.
     chain_id: u64,
-    address: String,
+    /// Address of the contract.
+    address: String, // TODO change this to `Address`.
 }
 
+/// Data returned for a verified contract.
 #[derive(Serialize)]
 pub struct VerifiedResponse {
-    // TODO
+    // TODO This should probably use the same `SuccessfulVerification` struct from `verify.rs`.
 }
 
+/// Data returned for an unverified contract that was decompiled.
 #[derive(Serialize)]
 pub struct DecompiledResponse {
-    chain_id: Chain,
-    address: Address,
-    verified: bool,
-    abi: String,      // TODO stronger type from ethers-rs?
-    bytecode: String, // TODO stronger type from ethers-rs?
-    disassembled: String,
-    solidity: String,
+    /// Chain the contract is deployed on.
+    pub chain_id: Chain,
+    /// Address of the contract.
+    pub address: Address,
+    /// True if the contract is verified, false otherwise.
+    pub verified: bool,
+    /// Inferred ABI of the contract.
+    pub abi: String, // TODO return this as a `LosslessAbi`.
+    /// The deployed code of the contract, also known as the runtime code. This is the code that
+    /// was returned by executing the creation code and lives at the contract address on-chain.
+    pub bytecode: String, // TODO return this as `CompactDeployedBytecode`.
+    /// The disassembled bytecode of the contract.
+    pub disassembled: String,
+    /// Inferred Solidity source code of the contract from decompiling the bytecode.
+    pub solidity: String,
 }
 
+/// Error response for when a contract is not found.
 #[derive(Serialize)]
 pub struct ErrorResponse {
-    error: String,
+    /// Error message.
+    pub error: String,
 }
 
+/// Response for the contract route.
 enum ApiResponse {
-    Success(DecompiledResponse),
+    /// Contract is verified so verification data is returned. This is currently unused since Cove
+    /// does not persist verification data. This is why the leading underscore is used.
+    _Verified(VerifiedResponse),
+    /// Contract is not verified so decompilation data is returned.
+    Decompiled(DecompiledResponse),
+    /// An error occurred while processing the request.
     Error(ErrorResponse),
 }
 
 impl IntoResponse for ApiResponse {
     fn into_response(self) -> Response {
         match self {
-            ApiResponse::Success(success) => (http::StatusCode::OK, Json(success)).into_response(),
+            ApiResponse::_Verified(success) => {
+                (http::StatusCode::OK, Json(success)).into_response()
+            }
+            ApiResponse::Decompiled(success) => {
+                (http::StatusCode::OK, Json(success)).into_response()
+            }
             ApiResponse::Error(error) => {
                 (http::StatusCode::BAD_REQUEST, Json(error)).into_response()
             }
@@ -55,7 +80,10 @@ impl IntoResponse for ApiResponse {
     }
 }
 
-// #[tracing::instrument(name = "Fetching contract")]
+/// This route is intended to return data for a contract that was previously verified, and for
+/// unverified contracts falls back to decompiling the bytecode with heimdall. However, Cove does
+/// not currently persist verification results in a database. As a result, this route will always
+/// decompile the bytecode with heimdall.
 pub async fn contract(Query(contract_query): Query<ContractQuery>) -> impl IntoResponse {
     let chain_id = Chain::try_from(contract_query.chain_id).unwrap();
     let address = Address::from_str(&contract_query.address).unwrap();
@@ -75,7 +103,9 @@ pub async fn contract(Query(contract_query): Query<ContractQuery>) -> impl IntoR
 
     let temp_dir = TempDir::new().unwrap();
     DecompileBuilder::new(&runtime_code.to_string())
-        .output(temp_dir.path().to_str().unwrap()) // comment out this line to have files saved locally
+        // Comment out the below line to have files saved locally, which can be useful for
+        // debugging.
+        .output(temp_dir.path().to_str().unwrap())
         .include_sol(true)
         .verbosity(0)
         .skip_resolving(false)
@@ -102,5 +132,5 @@ pub async fn contract(Query(contract_query): Query<ContractQuery>) -> impl IntoR
         disassembled,
         solidity,
     };
-    ApiResponse::Success(response)
+    ApiResponse::Decompiled(response)
 }

@@ -28,6 +28,8 @@ where
     Registry::default().with(env_filter).with(JsonStorageLayer).with(formatting_layer)
 }
 
+/// Register a subscriber as global default to process span data.
+/// This should only be called once.
 pub fn init_subscriber(subscriber: impl Subscriber + Send + Sync) {
     LogTracer::init().expect("Failed to set logger");
     set_global_default(subscriber).expect("Failed to set subscriber");

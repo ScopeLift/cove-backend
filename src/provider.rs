@@ -9,15 +9,22 @@ use ethers::{
 use futures::future;
 use std::{collections::HashMap, env, error::Error, path::PathBuf, str::FromStr, sync::Arc};
 
+/// Contract creation data.
 pub struct ContractCreation {
+    /// The transaction hash of the contract creation transaction.
     pub tx_hash: TxHash,
+    /// The block number of the contract creation transaction.
     pub block: BlockNumber,
+    /// The creation code of the contract.
     pub creation_code: Bytes,
 }
 
+/// Match data for a given artifact.
 #[derive(Debug, Default, Clone)]
 pub struct ContractMatch {
+    /// Path to the artifact.
     pub artifact: PathBuf,
+    /// The type of match for that artifact against the expected code.
     pub match_type: MatchType,
 }
 
@@ -25,6 +32,7 @@ pub struct ContractMatch {
 // ======== Single Chain ========
 // ==============================
 
+/// Create a provider for the given chain.
 pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     match chain {
         // Mainnet + Testnets.
@@ -54,6 +62,7 @@ pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
     }
 }
 
+/// Return the RPC provider URL for the given chain.
 pub fn provider_url_from_chain(chain: Chain) -> String {
     match chain {
         // Mainnet + Testnets.
@@ -69,6 +78,7 @@ pub fn provider_url_from_chain(chain: Chain) -> String {
     }
 }
 
+/// Return the runtime code at the given address using the given provider.
 pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Address) -> Bytes {
     provider.get_code(address, None).await.unwrap()
 }
@@ -77,23 +87,30 @@ pub async fn contract_runtime_code(provider: &Arc<Provider<Http>>, address: Addr
 // ======== Multi-Chain ========
 // =============================
 
+/// The response from a multi-chain provider's query.
 #[derive(Debug, Default)]
 pub struct ChainResponse<T> {
+    /// A mapping from chain to the response for that chain.
     pub responses: HashMap<Chain, Option<T>>,
 }
 
 impl<T> ChainResponse<T> {
+    /// Returns `true` if all responses are `None`, `false` otherwise.
     pub fn is_all_none(&self) -> bool {
         self.responses.values().all(|value| value.is_none())
     }
 
+    /// Returns an iterator over the `Some` entries of the response.
     pub fn iter_entries(&self) -> impl Iterator<Item = (&Chain, &T)> {
         self.responses.iter().filter_map(|(key, value)| value.as_ref().map(|v| (key, v)))
     }
 }
 
+/// A provider that performs the same queries or operations across multiple chains simultaneously.
 pub struct MultiChainProvider {
+    /// The chains that this provider supports.
     pub chains: Vec<Chain>,
+    /// The provider for each chain.
     pub providers: HashMap<Chain, Arc<Provider<Http>>>,
 }
 
@@ -104,6 +121,7 @@ impl Default for MultiChainProvider {
 }
 
 impl MultiChainProvider {
+    /// Create a new `MultiChainProvider` with all supported chains.
     pub fn new() -> Self {
         let chains = vec![
             Chain::Arbitrum,
@@ -123,11 +141,14 @@ impl MultiChainProvider {
         Self { chains, providers }
     }
 
+    /// Given an address, return the creation code at that address for each supported chain.
     pub async fn get_creation_code(
         &self,
         address: Address,
         creation_tx_hashes: Option<HashMap<Chain, TxHash>>,
     ) -> Result<ChainResponse<ContractCreation>, Box<dyn Error + Send + Sync>> {
+        /// Given an address, return the creation code at that address for the chain specified by
+        /// the provider.
         async fn find_creation_code(
             provider: &Arc<Provider<Http>>,
             address: Address,
@@ -146,10 +167,13 @@ impl MultiChainProvider {
         Ok(ChainResponse { responses })
     }
 
+    /// Given an address, return the deployed code at that address for each supported chain.
     pub async fn get_deployed_code(
         &self,
         address: Address,
     ) -> Result<ChainResponse<Bytes>, Box<dyn Error>> {
+        /// Given an address, return the deployed code at that address for the chain specified by
+        /// the given provider.
         async fn find_deployed_code(
             provider: &Arc<Provider<Http>>,
             address: Address,
@@ -169,11 +193,16 @@ impl MultiChainProvider {
         Ok(ChainResponse { responses })
     }
 
+    /// Given the creation code data being compared against and the build artifacts from a project,
+    /// compare the creation code against the expected creation code for each artifact and return
+    /// the best match found. It's possible that no match is found.
     pub fn compare_creation_code(
         &self,
         project: &impl Framework,
         creation_data: &ChainResponse<ContractCreation>,
     ) -> ChainResponse<ContractMatch> {
+        /// Compares the creation code against the expected creation code for each artifact and
+        /// returns the best match.
         fn compare(
             project: &impl Framework,
             expected_creation_code: &Bytes,
@@ -233,11 +262,16 @@ impl MultiChainProvider {
         ChainResponse { responses }
     }
 
+    /// Given the deployed code being compared against and the build artifacts from a project,
+    /// compare the deployed code against the expected deployed code for each artifact and return
+    /// the best match found. It's possible that no match is found.
     pub fn compare_deployed_code(
         &self,
         project: &impl Framework,
         deployed_code: &ChainResponse<Bytes>,
     ) -> ChainResponse<ContractMatch> {
+        /// Compares the deployed code against the expected deployed code for each artifact and
+        /// returns the best match.
         fn compare(
             project: &impl Framework,
             expected_deployed_code: &Bytes,
@@ -295,6 +329,8 @@ impl MultiChainProvider {
     }
 }
 
+/// Given the transaction hash of a contract creation transaction, extracts the creation code from
+/// the transaction and returns the creation data. This feature is currently not supported.
 async fn find_creation_data(
     provider: &Arc<Provider<Http>>,
     address: Address,
@@ -310,11 +346,24 @@ async fn find_creation_data(
     Err("Automatically finding creation data is currently not supported.".into())
 }
 
+/// Given the transaction hash of a contract creation transaction, extracts the creation code from
+/// the transaction. This feature is currently not supported.
 async fn creation_code_from_tx_hash(
     provider: &Arc<Provider<Http>>,
     address: Address,
     tx_hash: TxHash,
 ) -> Result<(Bytes, Transaction), Box<dyn std::error::Error + Send + Sync>> {
+    // TODO This is not currently supported, but the flow would be as follows:
+    //   1. Fetch the transaction data.
+    //   2. If `to` is None, this was a regular CREATE transaction so we can extract the creation
+    //      code from the input data.
+    //   3. Otherwise, the contract was deployed by a factory. First, check the `to` address and see
+    //      if it's a known factory. If so, we'll know how to decode the transaction data to extract
+    //      the creation code.
+    //   4. If the `to` address is not a known factory, we trace the transaction to find the call
+    //      that deployed the contract. Infura now supports `trace_call` so we can use that here.
+    // Note that steps 1, 2, and 3 are implemented below. Step 4 is not implemented. Step 3 can also
+    // be expanded to support more factories, or it can be removed entirely and we can always trace.
     let tx = provider.get_transaction(tx_hash).await?.ok_or("Transaction not found")?;
 
     // Regular CREATE transaction.

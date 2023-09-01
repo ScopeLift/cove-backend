@@ -37,6 +37,8 @@ The current state of smart contract verification has a lot of room for improveme
 
 ## Development
 
+### Getting Started
+
 Run `cp .env.template .env` and fill in the environment variables.
 Then run `cargo run` to start the server or `cargo test` to run tests.
 
@@ -44,12 +46,22 @@ Formatting and linting use the latest nightly version of Rust, and clippy warnin
 Therefore use:
 
 - `cargo +nightly fmt` to format the code.
-- `cargo +nightly clippy --all --all-features -- -D warnings` to lint the code.
+- `cargo +nightly clippy --all --all-features -- -D warnings -W clippy::missing_docs_in_private_items` to lint the code.
+- `RUSTDOCFLAGS='-D missing_docs' cargo doc --workspace --all-features --no-deps` to lint the docs.
 
 Deployment is done with a docker container so all dependencies (e.g. git and foundry) can be installed in the container.
 To build the docker image, run `docker build --tag cove .` in the root directory.
 To start a container from that image, run `docker run --env-file .env -p 8000:8000 cove`
 
+### How it Works
+
+All methods and modules are documented, so the best way to gain an understanding of the code is to read the docs.
+This can be done by running `cargo doc --open --document-private-items` and reading about each of the modules and methods.
+
+Much of the structure is based on the book [Zero To Production In Rust](https://www.zero2prod.com), which is a great resource for learning how to build a production-ready Rust applications.
+
 [^1]: The frontend can be found in the [ScopeLift/cove-frontend](https://github.com/ScopeLift/cove-frontend) repo.
+
 [^2]: Creation transaction hashes and forge build profiles are required for now to reduce verification time and RPC usage.
+
 [^3]: Thanks to [heimdall-rs](https://github.com/Jon-Becker/heimdall-rs) by @Jon-Becker.
