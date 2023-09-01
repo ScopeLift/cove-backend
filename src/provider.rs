@@ -1,6 +1,6 @@
 use crate::{
     bytecode::{creation_code_equality_check, deployed_code_equality_check, MatchType},
-    frameworks::Framework,
+    frameworks::framework::Framework,
 };
 use ethers::{
     providers::{Http, Middleware, Provider},
