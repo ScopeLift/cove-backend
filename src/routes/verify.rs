@@ -1,6 +1,6 @@
 use crate::{
     bytecode::MatchType,
-    frameworks::{Foundry, Framework},
+    frameworks::{foundry::Foundry, framework::Framework},
     provider::{ChainResponse, MultiChainProvider},
 };
 use axum::{
