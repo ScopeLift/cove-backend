@@ -58,6 +58,9 @@ pub fn provider_from_chain(chain: Chain) -> Arc<Provider<Http>> {
         Chain::XDai => {
             Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
         }
+        Chain::Avalanche => {
+            Arc::new(Provider::<Http>::try_from(provider_url_from_chain(chain)).unwrap())
+        }
         _ => panic!("Unsupported chain"),
     }
 }
@@ -74,6 +77,7 @@ pub fn provider_url_from_chain(chain: Chain) -> String {
         Chain::Arbitrum => env::var("ARBITRUM_ONE_RPC_URL").unwrap(),
         Chain::Polygon => env::var("POLYGON_RPC_URL").unwrap(),
         Chain::XDai => env::var("GNOSIS_CHAIN_RPC_URL").unwrap(),
+        Chain::Avalanche => env::var("AVALANCHE_RPC_URL").unwrap(),
         _ => panic!("Unsupported chain"),
     }
 }
@@ -131,6 +135,7 @@ impl MultiChainProvider {
             Chain::Polygon,
             Chain::Sepolia,
             Chain::XDai,
+            Chain::Avalanche,
         ];
 
         let providers = chains
