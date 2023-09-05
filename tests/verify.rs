@@ -425,6 +425,23 @@ async fn verify_gitcoin_governor_alpha() -> Result<(), Box<dyn std::error::Error
     .await
 }
 
+#[tokio::test]
+async fn verify_traderjoe_lbrouter_avalanche() -> Result<(), Box<dyn std::error::Error>> {
+    run_integration_test(
+        "https://github.com/traderjoe-xyz/joe-v2/",
+        "c6870ed6615ac9d96663c40216e5ed7c420b06e6",
+        "0xb4315e873dbcf96ffd0acd8ea43f689d8c20fb30",
+        json!({
+            "framework": "foundry",
+            "buildHint": "default"
+        }),
+        json!({
+            "avalanche": "0xfb3fba071ca9b76edf5a2bf3eddff271a1bbc765dfacd7b1b6c2be3e13bdb1ec"
+        }),
+    )
+    .await
+}
+
 async fn run_integration_test(
     repo_url: &str,
     repo_commit: &str,
